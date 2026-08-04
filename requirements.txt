@@ -1,0 +1,12 @@
+# Instruct pip to use the CPU-only wheel repository for PyTorch
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# CPU-only PyTorch (Lightweight, no CUDA bloat)
+torch
+torchvision
+
+# Core Image & Browser Automation Dependencies
+numpy>=1.24.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+playwright>=1.40.0
