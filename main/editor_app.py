@@ -25,6 +25,7 @@ from flask import Flask, jsonify, request, send_file, render_template, abort
 
 from card_render import (
     TEMPLATE_PATH, build_default_layout, merge_layout, render_card, hex_to_rgb,
+    load_active_template,
 )
 
 # cardfiller.py resolves its data directories (image/, output/, completed/,
@@ -60,6 +61,35 @@ def load_record(name: str) -> dict:
     record = json.loads(path.read_text(encoding="utf-8"))
     record["layout"] = merge_layout(build_default_layout(), record.get("layout"))
     return record
+
+
+def record_template_path(record: dict) -> str:
+    """Which template image this card should be shown/rendered on, as a path
+    relative to the project root (for both the /media/ route and PIL).
+
+    Resolution order:
+      1. the per-card template recorded in the sidecar (new batch runs write it);
+      2. the active designed template (templates/active_template.json) — used by
+         the scraper, and also covers old sidecars that predate the field;
+      3. the legacy hard-coded template.png.
+    """
+    tpl = record.get("template_file")
+    if tpl:
+        p = (BASE_DIR / tpl).resolve()
+        if p.exists():
+            try:
+                return str(p.relative_to(BASE_DIR.resolve()))
+            except ValueError:
+                pass
+    active = load_active_template()
+    if active and active.get("template_file"):
+        p = (BASE_DIR / str(active["template_file"])).resolve()
+        if p.exists():
+            try:
+                return str(p.relative_to(BASE_DIR.resolve()))
+            except ValueError:
+                pass
+    return TEMPLATE_PATH
 
 
 def save_record(name: str, record: dict):
@@ -126,7 +156,7 @@ def api_record(name):
         "name": name,
         "data": record["data"],
         "layout": record["layout"],
-        "template_url": f"/media/{TEMPLATE_PATH}",
+        "template_url": f"/media/{record_template_path(record)}",
         "output_url": f"/media/{record.get('output_file', '')}",
         "source_url": f"/media/{source.relative_to(BASE_DIR)}" if source else None,
         "source_size": _image_size(source) if source else None,
@@ -153,7 +183,7 @@ def api_save(name):
     source = resolve_source_image(record)
     im = render_card(
         record["data"], record["layout"],
-        template_path=str(BASE_DIR / TEMPLATE_PATH),
+        template_path=str(Path.cwd() / record_template_path(record)),
         photo_source_path=str(source) if source else None,
     )
     CARD_DIR.mkdir(parents=True, exist_ok=True)

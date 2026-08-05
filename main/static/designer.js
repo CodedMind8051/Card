@@ -215,6 +215,11 @@ function addTextObj(key) {
     fontWeight: spec.bold ? "bold" : "normal",
     textAlign: spec.align || "left",
     fontFamily: "DejaVu Sans, Arial, sans-serif",
+    // Match PIL's anchor: the box top = the top of the first text line
+    // (ascender), i.e. anchor "la". A 1.0 line-height and zero padding keep the
+    // box tight against the glyphs so the (x, y) you see is what PIL draws.
+    lineHeight: 1,
+    padding: 0,
     visible: spec.enabled !== false,
     hasRotatingPoint: false, lockRotation: true,
     cornerColor: "#f0b455", cornerSize: 11, transparentCorners: false,
@@ -239,6 +244,7 @@ function bakeTextObj(key, obj) {
   const sx = obj.scaleX || 1, sy = obj.scaleY || 1;
   spec.x = Math.round(obj.left);
   spec.y = Math.round(obj.top);
+  if (!spec.anchor) spec.anchor = "la";
   spec.width = Math.max(1, Math.round(obj.width * sx));
   spec.font_size = Math.max(4, Math.round(obj.fontSize * sy));
   if (spec.multiline) {
@@ -476,6 +482,7 @@ $("#btn-add-field").addEventListener("click", () => {
   state.layout.texts[key] = {
     x: 20, y: 40, width: 300, font_size: 30, min_font_size: 12,
     color: "#000000", bold: true, align: "left", multiline: false, uppercase: false,
+    anchor: "la",
   };
   state.dummy[key] = "";
   addTextObj(key);

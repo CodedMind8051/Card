@@ -35,6 +35,10 @@ let canvasW = 0;
 let canvasH = 0;
 let displayScale = 1;
 
+// reference-panel (original photo) zoom
+let refZoom = 1;        // user zoom multiplier, 1 = fit-to-panel
+let refFitScale = 0;    // scale that fits the natural image into the panel
+
 const $ = (sel) => document.querySelector(sel);
 
 async function loadCardList() {
@@ -50,11 +54,12 @@ async function loadCardList() {
   }
   const list = $("#card-list");
   list.innerHTML = "";
-  for (const r of records) {
+  records.forEach((r, i) => {
     const item = document.createElement("div");
     item.className = "card-item";
     item.dataset.name = r.name;
     item.innerHTML = `
+      <span class="idx">${i + 1}</span>
       <img src="${r.output_url}" loading="lazy">
       <div class="meta">
         <div class="name">${r.student_name || "(no name)"}</div>
@@ -62,7 +67,7 @@ async function loadCardList() {
       </div>`;
     item.addEventListener("click", () => selectCard(r.name));
     list.appendChild(item);
-  }
+  });
 }
 
 async function selectCard(name) {
@@ -90,6 +95,13 @@ async function selectCard(name) {
   $("#editor").hidden = false;
 
   const refImg = $("#reference-img");
+  refZoom = 1;
+  refFitScale = 0;
+  refImg.style.width = "";
+  refImg.style.maxWidth = "";
+  refImg.style.maxHeight = "";
+  $("#reference-panel .reference-body").classList.remove("zoomed");
+  $("#ref-zoom-label").textContent = "100%";
   if (record.source_url) {
     refImg.hidden = false;
     refImg.src = record.source_url;
@@ -209,6 +221,58 @@ function loadSourceImage(url) {
   });
   return sourceImgPromise;
 }
+
+/* --------------------------------------------- reference photo zoom --- */
+
+function computeRefFit() {
+  const body = $("#reference-panel .reference-body");
+  const img = $("#reference-img");
+  if (!body || !img.naturalWidth) return 1;
+  const availW = Math.max(60, body.clientWidth - 28);
+  const availH = Math.max(60, body.clientHeight - 28);
+  return Math.min(1, availW / img.naturalWidth, availH / img.naturalHeight);
+}
+
+function applyRefZoom() {
+  const img = $("#reference-img");
+  const body = $("#reference-panel .reference-body");
+  if (!img.naturalWidth) return;
+  if (refZoom <= 1.001) {
+    img.style.width = "";
+    img.style.maxWidth = "";
+    img.style.maxHeight = "";
+    body.classList.remove("zoomed");
+    $("#ref-zoom-label").textContent = "100%";
+    return;
+  }
+  const scale = refZoom * (refFitScale || 1);
+  const dispW = Math.round(img.naturalWidth * scale);
+  const dispH = Math.round(img.naturalHeight * scale);
+  img.style.maxWidth = "none";
+  img.style.maxHeight = "none";
+  img.style.width = dispW + "px";
+  img.style.height = "auto";
+  // only lock to top-left once the image actually overflows the panel
+  const availW = Math.max(60, body.clientWidth - 28);
+  const availH = Math.max(60, body.clientHeight - 28);
+  body.classList.toggle("zoomed", dispW > availW || dispH > availH);
+  $("#ref-zoom-label").textContent = Math.round(refZoom * 100) + "%";
+}
+
+$("#reference-img").addEventListener("load", () => {
+  refFitScale = computeRefFit();
+  applyRefZoom();
+});
+
+$("#btn-ref-zoom-in").addEventListener("click", () => {
+  refZoom = Math.min(8, Math.max(1, refZoom) * 1.25);
+  applyRefZoom();
+});
+$("#btn-ref-zoom-out").addEventListener("click", () => {
+  refZoom = Math.max(1, Math.min(8, refZoom) / 1.25);
+  applyRefZoom();
+});
+$("#btn-ref-zoom-fit").addEventListener("click", () => { refZoom = 1; applyRefZoom(); });
 
 /* -------------------------------------------------- photo rendering --- */
 

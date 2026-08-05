@@ -146,6 +146,14 @@ def merge_layout(default, override):
     if "texts" in override:
         for key, val in override["texts"].items():
             if key in result["texts"]:
+                # A field that was positioned in the designer uses the canvas'
+                # top-left coordinate system (anchor "la"). The built-in default
+                # anchors (lm/mm) only apply to the untouched hard-coded layout,
+                # so don't let a default anchor override a designed field unless
+                # it explicitly declares one.
+                if ("x" in val or "y" in val) and "anchor" not in val:
+                    val = dict(val)
+                    val["anchor"] = "la"
                 result["texts"][key].update(val)
             else:
                 result["texts"][key] = val
@@ -290,6 +298,15 @@ def _wrap_lines(text, font, max_width):
     return wrapped
 
 
+def _resolve_anchor(anchor: str, align: str) -> str:
+    """Turn a vertical anchor + an alignment choice into a full 2-char PIL
+    anchor. 'l'/'m'/'r' horizontal origin follows `align`; the vertical origin
+    (ascender 'a', middle 'm', ...) is taken from `anchor` unchanged."""
+    h = {"left": "l", "center": "m", "right": "r"}.get((align or "left"), "l")
+    v = anchor[-1] if len(anchor) >= 2 else anchor
+    return h + v
+
+
 def _autofit(draw, text, x, y, max_width, font_path, base_size, color, min_size, anchor):
     """Exact copy of fixedCard.py draw_autofit_text(): single-line, shrink
     by 1pt until it fits max_width, draw with the given PIL anchor."""
@@ -364,16 +381,21 @@ def draw_text_box(draw, text, spec, font_bold=FONT_BOLD, font_regular=FONT_REGUL
     width = spec.get("width")
     max_height = spec.get("height")
     multiline = spec.get("multiline", False)
-    anchor = spec.get("anchor")
+    # "la" = left-ascender (top of the first text line) — the reference point
+    # the browser designer treats as the field's (x, y). Defaulting here makes
+    # every spec (designed or built-in) render on the same PIL baseline, so the
+    # designer placement and the exported PNG agree.
+    anchor = spec.get("anchor", "la")
 
-    if anchor:
-        if multiline:
-            _fitted(draw, text, x, y, width or 500, max_height or 200,
-                    font_path, base_size, color, min_size)
-        else:
-            _autofit(draw, text, x, y, width or 500, font_path, base_size,
-                     color, min_size, anchor)
-        return
+    if multiline:
+        _fitted(draw, text, x, y, width or 500, max_height or 200,
+                font_path, base_size, color, min_size)
+    else:
+        # Horizontal origin follows the user's chosen align (l/m/r), while the
+        # vertical origin is kept from the stored anchor (a=ascender, m=middle).
+        _autofit(draw, text, x, y, width or 500, font_path, base_size,
+                 color, min_size, _resolve_anchor(anchor, spec.get("align", "left")))
+    return
 
     # ---- legacy top-left-box path (specs saved without an anchor) ----
     align = spec.get("align", "left")

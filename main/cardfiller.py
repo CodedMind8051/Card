@@ -312,12 +312,14 @@ def sidecar_path_for(image_name: str) -> Path:
     return RECORD_DIR / f"{Path(image_name).stem}_data.json"
 
 
-def save_sidecar(image_name: str, data: dict, layout: dict, source_file: str, output_file: str):
+def save_sidecar(image_name: str, data: dict, layout: dict, source_file: str, output_file: str,
+                 template_file: str = TEMPLATE_PATH):
     """Write the editable record that the browser editor (--edit) reads/writes."""
     record = {
         "image_name": image_name,
         "source_file": source_file,    # path to the ORIGINAL uploaded image (relative to project root)
         "output_file": output_file,    # path to the rendered card PNG
+        "template_file": template_file,  # which template the card was rendered on
         "data": data,
         "layout": layout,
     }
@@ -360,7 +362,7 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
     # Source file will live under completed/ once the pass finishes moving it;
     # we record that expected final location so the editor can find it later.
     source_rel = str(Path("completed") / image_name)
-    save_sidecar(image_name, data, layout, source_rel, str(output_path))
+    save_sidecar(image_name, data, layout, source_rel, str(output_path), template_file=template_path)
     return output_path
 
 
