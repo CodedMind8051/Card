@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ID Card Editor</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='editor.css') }}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css">
+</head>
+<body>
+
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <span class="dot"></span>
+      <h1>Cards</h1>
+    </div>
+    <div id="card-list" class="card-list"></div>
+  </aside>
+
+  <main class="workspace" id="workspace">
+    <div class="empty-state" id="empty-state">
+      <div class="empty-inner">
+        <div class="empty-icon">ID</div>
+        <p>Pick a card on the left to start editing.</p>
+      </div>
+    </div>
+
+    <div class="editor" id="editor" hidden>
+      <header class="toolbar">
+        <button id="btn-collapse-toolbar" class="btn icon" title="Collapse/expand toolbar">▾</button>
+        <div class="toolbar-inner">
+          <div class="toolbar-group">
+            <button id="btn-recrop" class="btn">Recrop photo</button>
+            <button id="btn-rotate-l" class="btn icon" title="Rotate photo left">⟲</button>
+            <button id="btn-rotate-r" class="btn icon" title="Rotate photo right">⟳</button>
+          </div>
+          <div class="toolbar-group" id="text-controls" hidden>
+            <label>Size <input type="number" id="ctl-font-size" min="8" max="300" style="width:60px"></label>
+            <label>Color <input type="color" id="ctl-color"></label>
+            <label class="checkbox"><input type="checkbox" id="ctl-bold"> Bold</label>
+          </div>
+          <div class="toolbar-group right">
+            <div class="zoom">
+              <button id="btn-zoom-out" class="btn icon" title="Zoom out">−</button>
+              <span id="zoom-label">60%</span>
+              <button id="btn-zoom-in" class="btn icon" title="Zoom in">+</button>
+              <button id="btn-zoom-fit" class="btn">Fit</button>
+            </div>
+            <span id="save-status" class="save-status"></span>
+            <button id="btn-save" class="btn primary">Save card</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="content">
+        <div class="canvas-area">
+          <div class="canvas-shell" id="canvas-shell">
+            <canvas id="fabric-canvas"></canvas>
+          </div>
+        </div>
+        <aside class="reference" id="reference-panel">
+          <div class="reference-head">
+            <span class="reference-title">Original photo</span>
+            <div class="ref-actions">
+              <button id="btn-recrop-2" class="btn small">Recrop</button>
+              <button id="btn-collapse-ref" class="btn icon small" title="Collapse/expand">▸</button>
+            </div>
+          </div>
+          <div class="reference-body">
+            <img id="reference-img" alt="Original source">
+            <div id="reference-missing" class="reference-missing" hidden>Original photo not found on disk</div>
+          </div>
+          <div class="reference-hint">Click the photo to crop it (uses the card photo)</div>
+        </aside>
+      </div>
+
+      <footer class="fields-panel" id="fields-panel">
+        <div class="fields-head">
+          <span class="fields-title">Fields</span>
+          <button id="btn-collapse-fields" class="btn icon small" title="Collapse/expand">▾</button>
+        </div>
+        <div class="fields-body">
+          <div class="fields-grid" id="fields-grid"></div>
+        </div>
+      </footer>
+    </div>
+  </main>
+</div>
+
+<div class="modal" id="crop-modal" hidden>
+  <div class="modal-inner">
+    <div class="modal-head">
+      <h2>Crop student photo</h2>
+      <button id="crop-close" class="btn icon">✕</button>
+    </div>
+    <div class="crop-body">
+      <img id="crop-image" alt="Original for cropping">
+    </div>
+    <div class="modal-foot">
+      <div class="toolbar-group">
+        <button id="crop-reset" class="btn">Reset</button>
+        <span class="modal-hint">This is the photo as it appears on the card. Rotate with ⟲ / ⟳ on the card, then crop here.</span>
+      </div>
+      <button id="crop-apply" class="btn primary">Use this crop</button>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='editor.js') }}"></script>
+</body>
+</html>
