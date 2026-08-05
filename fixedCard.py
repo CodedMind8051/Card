@@ -107,12 +107,12 @@ TEMPLATE_PATH = "template.png"
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-VALUE_COLOR = (194, 0, 0)       # dark red — field values
+VALUE_COLOR = (208, 0, 0)       # dark red — field values (sampled directly from this template)
 NAME_COLOR = (255, 255, 255)    # white — student name on blue banner
 SECTION_COLOR = (222, 255, 0)   # yellow-green — "Sec- A"
 
 FIELD_FONT_SIZE = 44
-NAME_FONT_SIZE = 85
+NAME_FONT_SIZE = 79
 SECTION_FONT_SIZE = 54
 
 # Font sizes never shrink below these when auto-fitting, so text stays readable
@@ -120,19 +120,19 @@ FIELD_MIN_FONT_SIZE = 18
 NAME_MIN_FONT_SIZE = 30
 
 FIELD_POSITIONS = {
-    "father_name":   (440, 916),
-    "mother_name":   (440, 973),
-    "dob":           (440, 1029),
-    "class":         (440, 1086),
-    "roll_number":   (440, 1143),
-    "mobile_number": (440, 1200),
-    "address":       (440, 1244),
+    "father_name":   (440, 859),
+    "mother_name":   (440, 915),
+    "dob":           (440, 971),
+    "class":         (440, 1027),
+    "roll_number":   (440, 1083),
+    "mobile_number": (440, 1140),
+    "address":       (440, 1177),
 }
 
-NAME_CENTER = (530, 809)
+NAME_CENTER = (531, 784)
 SECTION_POSITION = (27, 1394)
 
-PHOTO_BOX = (372, 292, 325, 456)
+PHOTO_BOX = (371, 292, 319, 431)
 PHOTO_CORNER_RADIUS = 20
 
 PHOTO_PAD_SIDE = 0.35
@@ -413,26 +413,45 @@ def extract_student_photo_smart(image_path: Path, target_aspect: float, ai_ratio
 
     return pil_crop
 
-
 def enhance_photo(img: Image.Image) -> Image.Image:
-    arr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    arr = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
 
-    h, w = arr.shape[:2]
-    if max(h, w) < 700:
-        scale = 700 / max(h, w)
-        arr = cv2.resize(arr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
+    # 1) Big upscale -> more pixels = smoother result
+    arr = cv2.resize(arr, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
 
-    arr = cv2.fastNlMeansDenoisingColored(arr, None, h=7, hColor=7, templateWindowSize=7, searchWindowSize=21)
+    # 2) Strong denoise (kills grain/scan noise)
+    arr = cv2.fastNlMeansDenoisingColored(arr, None, 10, 10, 7, 21)
+
+    # 3) White-balance + de-fade (per-channel percentile stretch)
+    out = np.zeros_like(arr, np.float32)
+    for c in range(3):
+        ch = arr[:, :, c].astype(np.float32)
+        lo, hi = np.percentile(ch, 0.5), np.percentile(ch, 99.5)
+        out[:, :, c] = np.clip((ch - lo) * 255.0 / max(hi - lo, 1), 0, 255)
+    arr = out.astype(np.uint8)
+
+    # 4) Local contrast (CLAHE on lightness)
     lab = cv2.cvtColor(arr, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
+    l = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(l)
     arr = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
-    blurred = cv2.GaussianBlur(arr, (0, 0), sigmaX=2)
-    arr = cv2.addWeighted(arr, 1.5, blurred, -0.5, 0)
+
+    # 5) Saturation boost -> skin/clothes look alive, not washed out
+    hsv = cv2.cvtColor(arr, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[..., 1] = np.clip(hsv[..., 1] * 1.15, 0, 255)
+    arr = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+    # 6) Smooth skin but keep edges sharp
+    arr = cv2.bilateralFilter(arr, 9, 75, 75)
+
+    # 7) REMOVE BLUE BACKDROP -> pure white (feathered edge, no halo)
+    # arr = remove_blue_background(arr)
+
+    # 8) Strong sharpen (unsharp mask)
+    blur = cv2.GaussianBlur(arr, (0, 0), 2.0)
+    arr = cv2.addWeighted(arr, 1.5, blur, -0.5, 0)
+
     return Image.fromarray(cv2.cvtColor(arr, cv2.COLOR_BGR2RGB))
-
-
 def fit_cover(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
     src_w, src_h = img.size
     scale = max(target_w / src_w, target_h / src_h)
@@ -455,12 +474,6 @@ def add_rounded_corners(img: Image.Image, radius: int) -> Image.Image:
 
 
 def draw_fitted_text(draw, text, x, y, max_width, max_height, font_path, font_size, color, min_font_size=14):
-    """
-    Wraps text across multiple lines AND shrinks the font if needed, so the
-    whole block fits inside max_width x max_height starting at (x, y).
-    Used for 'address', which has vertical room below it to grow into.
-    Stops shrinking at min_font_size to keep text readable.
-    """
     lines = text.split("\n")
     while font_size > min_font_size:
         font = ImageFont.truetype(font_path, font_size)
@@ -487,9 +500,6 @@ def draw_fitted_text(draw, text, x, y, max_width, max_height, font_path, font_si
                 draw.text((x, y + i * line_height), wline, font=font, fill=color, anchor="la")
             return
         font_size -= 2
-    # Reached min_font_size and it still doesn't fit — draw at min size anyway
-    # rather than silently dropping the text; it may slightly overflow but
-    # stays visible and readable, which is better than disappearing.
     font = ImageFont.truetype(font_path, font_size)
     bbox = font.getbbox("Ay")
     line_height = bbox[3] - bbox[1] + 4
@@ -514,14 +524,6 @@ def draw_fitted_text(draw, text, x, y, max_width, max_height, font_path, font_si
 
 def draw_autofit_text(draw, text, x, y, max_width, font_path, base_font_size, color,
                        min_font_size=FIELD_MIN_FONT_SIZE, anchor="lm"):
-    """
-    Draws a SINGLE line of text, shrinking the font size until it fits within
-    max_width. Used for fields that must stay on one line (name, DOB, class,
-    roll number, mobile number) — unlike draw_fitted_text, this never wraps,
-    since wrapping these would collide with the next field's fixed row
-    position below it. Stops at min_font_size so text stays readable even
-    for unusually long values.
-    """
     font_size = base_font_size
     font = ImageFont.truetype(font_path, font_size)
     while font_size > min_font_size:
@@ -552,20 +554,15 @@ def fill_template(data: dict, image_name: str, student_photo: Image.Image = None
     else:
         print("  No student photo detected - skipping photo paste.")
 
-    # ---- Student name: auto-shrink to fit within the banner width, so a
-    # long name can never overflow past the card edges (which would visually
-    # overlap the decorative border/wave graphics on either side). ----
     student_name = str(data.get("student_name", "") or "").upper()
     if student_name:
-        name_max_width = im.width - 60  # keep a margin from both edges
+        name_max_width = im.width - 60
         draw_autofit_text(
             draw, student_name, NAME_CENTER[0], NAME_CENTER[1],
             name_max_width, FONT_BOLD, NAME_FONT_SIZE, NAME_COLOR,
             min_font_size=NAME_MIN_FONT_SIZE, anchor="mm",
         )
 
-    # ---- Section (e.g. "Sec- A") — short by nature, but auto-fit anyway
-    # for consistency and safety against unexpected long values. ----
     section = str(data.get("section", "") or "").strip()
     if section:
         section_text = f"Sec- {section}"
@@ -576,11 +573,6 @@ def fill_template(data: dict, image_name: str, student_photo: Image.Image = None
             min_font_size=20, anchor="lm",
         )
 
-    # ---- Regular fields ----
-    # Each field's available width stops well before the card's right edge,
-    # and address's available height stops well before SECTION_POSITION's
-    # row, so a long address wrapping onto extra lines can never grow down
-    # into the "Sec- A" text or the signature/footer graphics below it.
     for key, (x, y) in FIELD_POSITIONS.items():
         value = str(data.get(key, "") or "")
         if not value:

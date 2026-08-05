@@ -1,0 +1,2 @@
+class BadJSONResponseError(RuntimeError):
+    pass

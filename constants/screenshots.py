@@ -1,0 +1,1 @@
+TEMP_SCREENSHOTS = ["03_after_upload_full.png", "03b_after_ai_mode.png", "04_response_full.png"]
