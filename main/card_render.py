@@ -26,6 +26,12 @@ TEMPLATE_PATH = "template.png"
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
+# Designed templates live in a templates/ folder next to the project root.
+# "active_template.json" is the pointer that the normal batch run reads, so a
+# design saved with `cardfiller.py --new` is automatically applied afterwards.
+TEMPLATES_DIR = Path("templates")
+ACTIVE_TEMPLATE_FILE = TEMPLATES_DIR / "active_template.json"
+
 # ---- Original hard-coded defaults (kept as the starting layout) ----
 VALUE_COLOR = (208, 0, 0)
 NAME_COLOR = (255, 255, 255)
@@ -404,6 +410,65 @@ def draw_text_box(draw, text, spec, font_bold=FONT_BOLD, font_regular=FONT_REGUL
         draw.text((draw_x, y + i * line_height), line, font=font, fill=color, anchor="la")
 
 
+# --------------------------------------------------------- template IO ---
+
+def save_active_template(name: str, layout: dict, dummy_data: dict,
+                         template_file: str = "template.png") -> Path:
+    """Persist a designed template as the one the next batch run uses.
+
+    `template_file` is the relative path to the template image, `layout` the
+    photo-box + text-field configuration, and `dummy_data` the sample values
+    used while designing (kept so you can re-open and tweak the design).
+    """
+    import json
+
+    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+    cfg = {
+        "name": name,
+        "template_file": template_file,
+        "layout": layout,
+        "dummy_data": dummy_data or {},
+    }
+    ACTIVE_TEMPLATE_FILE.write_text(
+        json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return ACTIVE_TEMPLATE_FILE
+
+
+def load_active_template() -> dict | None:
+    """Return the saved active-template config ({"name","template_file",
+    "layout","dummy_data"}) or None if none has been designed / the template
+    image is missing. The layout has the crop applied at fill-time, so this
+    just supplies the base positions/styles."""
+    import json
+    import copy
+    if not ACTIVE_TEMPLATE_FILE.exists():
+        return None
+    try:
+        cfg = json.loads(ACTIVE_TEMPLATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not Path(cfg.get("template_file", "")).exists():
+        return None
+    cfg["layout"] = merge_layout(build_default_layout(), cfg.get("layout"))
+    return cfg
+
+
+def list_designed_templates() -> list[dict]:
+    """Metadata for every template stored under templates/ (each has a
+    *_template.png and its design JSON), for the --new picker."""
+    import json
+    items = []
+    for p in sorted(TEMPLATES_DIR.glob("*_template.png")):
+        stem = p.stem[:-9]  # strip "_template"
+        cfg = TEMPLATES_DIR / f"{stem}_design.json"
+        items.append({
+            "name": stem,
+            "template_file": str(p),
+            "config_file": str(cfg),
+        })
+    return items
+
+
 # ---------------------------------------------------------------- render ---
 
 def render_card(data: dict, layout: dict, template_path=TEMPLATE_PATH, photo_source_path=None):
@@ -428,20 +493,22 @@ def render_card(data: dict, layout: dict, template_path=TEMPLATE_PATH, photo_sou
     texts = layout.get("texts", {})
 
     name_spec = texts.get("student_name")
-    if name_spec:
+    if name_spec and name_spec.get("enabled", True):
         val = str(data.get("student_name", "") or "")
         if name_spec.get("uppercase"):
             val = val.upper()
         draw_text_box(draw, val, name_spec)
 
     section_spec = texts.get("section")
-    if section_spec:
+    if section_spec and section_spec.get("enabled", True):
         val = str(data.get("section", "") or "").strip()
         if val:
             draw_text_box(draw, section_spec.get("prefix", "") + val, section_spec)
 
     for key, spec in texts.items():
         if key in ("student_name", "section"):
+            continue
+        if spec.get("enabled", True) is False:
             continue
         val = str(data.get(key, "") or "")
         draw_text_box(draw, val, spec)

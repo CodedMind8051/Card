@@ -4,7 +4,7 @@ import os
 # ------------------------
 # CONFIGURATION
 # ------------------------
-INPUT_FOLDER = "output2"
+INPUT_FOLDER = "output/cards"
 OUTPUT_PDF = "output.pdf"
 
 # A4 Landscape dimensions in pixels at 300 DPI (297mm x 210mm)

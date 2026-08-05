@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 
 from card_render import (
     TEMPLATE_PATH, PHOTO_BOX,
-    build_default_layout, detect_face_crop_rect, render_card,
+    build_default_layout, detect_face_crop_rect, render_card, load_active_template,
 )
 
 IMAGE_DIR = Path("image")
@@ -328,19 +328,30 @@ def save_sidecar(image_name: str, data: dict, layout: dict, source_file: str, ou
 
 
 def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratios=None):
-    """Render the card for the first time and save an editable sidecar next to it."""
+    """Render the card for the first time and save an editable sidecar next to it.
+
+    Uses the active template (if one was designed with `--new`), otherwise
+    falls back to the original hard-coded template.png layout."""
     CARD_DIR.mkdir(parents=True, exist_ok=True)
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
     output_path = CARD_DIR / f"{Path(image_name).stem}_filled.png"
-    if not Path(TEMPLATE_PATH).exists():
-        print(f"  Template not found at {TEMPLATE_PATH}, skipping fill step.")
+
+    active = load_active_template()
+    if active:
+        layout = dict(active["layout"])
+        template_path = str(Path(active["template_file"]))
+    else:
+        layout = build_default_layout()
+        template_path = TEMPLATE_PATH
+
+    if not Path(template_path).exists():
+        print(f"  Template not found at {template_path}, skipping fill step.")
         return None
 
-    layout = build_default_layout()
     crop_rect = detect_face_crop_rect(source_image_path, ai_ratios=ai_ratios)
     layout["photo"]["crop"] = crop_rect
 
-    im = render_card(data, layout, template_path=TEMPLATE_PATH, photo_source_path=str(source_image_path))
+    im = render_card(data, layout, template_path=template_path, photo_source_path=str(source_image_path))
     im.save(output_path)
     print(f"  Filled card saved: {output_path}")
     if crop_rect is None:
@@ -657,12 +668,26 @@ def scrape_main():
 def main():
     parser = argparse.ArgumentParser(description="Scrape + fill student ID cards, or edit them in the browser.")
     parser.add_argument("--edit", action="store_true", help="Launch the browser editor instead of scraping.")
-    parser.add_argument("--port", type=int, default=5000, help="Port for the --edit web server (default 5000).")
+    parser.add_argument("--new", action="store_true", help="Design a new template in the browser (asks for a template image path).")
+    parser.add_argument("--template", help="Template image or folder for --new (otherwise you are asked interactively).")
+    parser.add_argument("--port", type=int, default=5000, help="Port for the --edit / --new web server (default 5000).")
     args = parser.parse_args()
 
+    if args.edit and args.new:
+        print("Choose one of --edit or --new, not both.")
+        return
     if args.edit:
         from editor_app import run_editor
         run_editor(port=args.port)
+    elif args.new:
+        from designer import main as design_main
+        import sys
+        sys.argv = ["designer"]
+        if args.template:
+            sys.argv += [args.template]
+        if args.port != 5000:
+            sys.argv += ["--port", str(args.port)]
+        design_main()
     else:
         scrape_main()
 

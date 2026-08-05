@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ID Card Template Designer</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='designer.css') }}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+</head>
+<body>
+
+<!-- Pick a template (file manager) or reopen a previous design -->
+<section class="picker" id="picker">
+  <div class="picker-card">
+    <div class="picker-logo">
+      <span class="brand-logo">ID</span>
+      <h1>ID Card Template Designer</h1>
+      <p>Choose a blank template image, then place the photo box and text fields on it.</p>
+    </div>
+
+    <label class="file-drop" for="template-file" id="file-drop">
+      <input type="file" id="template-file" accept=".png,.jpg,.jpeg,image/*" hidden>
+      <span class="file-icon">🖼</span>
+      <span class="file-title">Choose template image</span>
+      <span class="file-sub">Opens your file manager — select a PNG/JPG blank card design</span>
+    </label>
+
+    <div class="designs" id="designs" hidden>
+      <div class="designs-title">Previously designed templates</div>
+      <div class="designs-grid" id="designs-grid"></div>
+    </div>
+
+    <div id="picker-msg" class="picker-msg" hidden></div>
+  </div>
+</section>
+
+<!-- Designer workspace -->
+<div class="desktop" id="workspace" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <span class="brand-title">Template Designer</span>
+      <span class="template-name" id="template-name">…</span>
+    </div>
+    <div class="topbar-actions">
+      <div class="zoom">
+        <button id="btn-zoom-out" class="btn icon" title="Zoom out">−</button>
+        <span id="zoom-label">60%</span>
+        <button id="btn-zoom-in" class="btn icon" title="Zoom in">+</button>
+        <button id="btn-zoom-fit" class="btn">Fit</button>
+      </div>
+      <button id="btn-preview" class="btn">Preview with dummy data</button>
+      <button id="btn-save" class="btn primary">Save template</button>
+      <span id="save-status" class="save-status"></span>
+    </div>
+  </header>
+
+  <div class="app">
+    <main class="workspace">
+      <div class="canvas-area" id="canvas-area">
+        <div class="canvas-shell" id="canvas-shell">
+          <canvas id="fabric-canvas"></canvas>
+        </div>
+      </div>
+    </main>
+
+    <aside class="side">
+      <section class="panel" id="photo-panel" hidden>
+        <div class="panel-head">Photo box</div>
+        <div class="panel-body">
+          <p class="hint">Where each student's photo is placed. Drag &amp; resize the dashed box on the canvas.</p>
+          <div class="num-grid">
+            <label>X <input type="number" id="photo-x"></label>
+            <label>Y <input type="number" id="photo-y"></label>
+            <label>W <input type="number" id="photo-w"></label>
+            <label>H <input type="number" id="photo-h"></label>
+          </div>
+          <div class="row">
+            <label>Corner radius <input type="number" id="photo-radius" min="0" max="200"></label>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="text-panel" hidden>
+        <div class="panel-head">Selected field</div>
+        <div class="panel-body">
+          <label class="field-key" id="text-key">—</label>
+          <div class="num-grid">
+            <label>X <input type="number" id="text-x"></label>
+            <label>Y <input type="number" id="text-y"></label>
+            <label>W <input type="number" id="text-w"></label>
+          </div>
+          <div class="num-grid">
+            <label>Size <input type="number" id="text-size" min="8" max="400"></label>
+            <label>Min <input type="number" id="text-min" min="4" max="100"></label>
+          </div>
+          <div class="row">
+            <label>Color <input type="color" id="text-color"></label>
+          </div>
+          <div class="row">
+            <label class="check"><input type="checkbox" id="text-bold"> Bold</label>
+            <label class="check"><input type="checkbox" id="text-multiline"> Wrap lines</label>
+          </div>
+          <div class="row">
+            <label>Align</label>
+            <select id="text-align">
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+            </select>
+          </div>
+          <div class="row">
+            <button id="btn-text-remove" class="btn danger">Remove field</button>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <footer class="fields-panel">
+    <div class="fields-head">
+      <span class="fields-title">Fields &amp; dummy student data</span>
+      <div class="fields-actions">
+        <button id="btn-add-field" class="btn small">+ Add field</button>
+      </div>
+    </div>
+    <div class="fields-body">
+      <div class="fields-grid" id="fields-grid"></div>
+    </div>
+  </footer>
+</div>
+
+<div class="modal" id="preview-modal" hidden>
+  <div class="modal-inner">
+    <div class="modal-head">
+      <h2>Preview</h2>
+      <button id="preview-close" class="btn icon">✕</button>
+    </div>
+    <div class="preview-body">
+      <img id="preview-img" alt="Preview">
+      <div id="preview-missing" hidden>Preview failed to render — check the terminal.</div>
+    </div>
+    <div class="modal-foot">
+      <span class="modal-hint">This is how the card looks with the dummy data. Real runs replace the dummy values and auto-crop the student photo.</span>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='designer.js') }}"></script>
+</body>
+</html>
