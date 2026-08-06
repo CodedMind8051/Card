@@ -1,81 +1,136 @@
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import os
 
 # ------------------------
 # CONFIGURATION
 # ------------------------
+
 INPUT_FOLDER = "output/cards"
 OUTPUT_PDF = "output.pdf"
 
-# A4 Landscape dimensions in pixels at 300 DPI (297mm x 210mm)
-PAGE_W = 3508  
-PAGE_H = 2480  
+# A4 Landscape at 300 DPI
+PAGE_W = 3508
+PAGE_H = 2480
 
-IMAGES_PER_PAGE = 10
 COLS = 5
 ROWS = 2
+IMAGES_PER_PAGE = COLS * ROWS
 
-# Margins and Spacing (in pixels)
-PAGE_MARGIN_X = 54     # Left/Right page margin
-PAGE_MARGIN_Y = 120    # Top/Bottom page margin
-IMAGE_SPACING_X = 40   # Horizontal gap between images
-IMAGE_SPACING_Y = 160  # Vertical gap between images
+# Margins
+PAGE_MARGIN_X = 54
+PAGE_MARGIN_Y = 120
 
-# Calculate exact image dimensions to fit the grid perfectly
-img_w = (PAGE_W - 2 * PAGE_MARGIN_X - (COLS - 1) * IMAGE_SPACING_X) // COLS
-img_h = (PAGE_H - 2 * PAGE_MARGIN_Y - (ROWS - 1) * IMAGE_SPACING_Y) // ROWS
-
-# Handle different Pillow versions for high-quality resampling
-resampling_filter = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
+# Space between cards
+IMAGE_SPACING_X = 40
+IMAGE_SPACING_Y = 160
 
 # ------------------------
 
-# 1. Get all image files
+# Calculate card size
+img_w = (
+    PAGE_W
+    - (2 * PAGE_MARGIN_X)
+    - ((COLS - 1) * IMAGE_SPACING_X)
+) // COLS
+
+img_h = (
+    PAGE_H
+    - (2 * PAGE_MARGIN_Y)
+    - ((ROWS - 1) * IMAGE_SPACING_Y)
+) // ROWS
+
+# Pillow compatibility
+if hasattr(Image, "Resampling"):
+    RESAMPLE = Image.Resampling.LANCZOS
+else:
+    RESAMPLE = Image.LANCZOS
+
+# ------------------------
+# Load images from LAST
+# ------------------------
+
 files = sorted(
     [
         os.path.join(INPUT_FOLDER, f)
         for f in os.listdir(INPUT_FOLDER)
         if f.lower().endswith((".png", ".jpg", ".jpeg"))
-    ]
+    ],
+    reverse=True,      # <-- Last image first
 )
 
 if not files:
-    raise Exception(f"No images found in {INPUT_FOLDER}.")
+    raise Exception(f"No images found in '{INPUT_FOLDER}'.")
 
 pages = []
 
-# 2. Process images in batches of 10
+# ------------------------
+# Create PDF Pages
+# ------------------------
+
 for start in range(0, len(files), IMAGES_PER_PAGE):
-    # Create a blank A4 Landscape white canvas
+
     canvas = Image.new("RGB", (PAGE_W, PAGE_H), "white")
+
     batch = files[start:start + IMAGES_PER_PAGE]
-    
+
     for i, path in enumerate(batch):
+
         img = Image.open(path).convert("RGB")
-        
-        # Force exact dimensions/ratio matching the PDF cards
-        img = img.resize((img_w, img_h), resampling_filter)
-        
-        # Calculate X/Y positions
-        col = i % COLS
+
+        # Resize
+        img = img.resize((img_w, img_h), RESAMPLE)
+
+        # ------------------------
+        # Image Enhancement
+        # ------------------------
+
+        # Slight contrast boost
+        img = ImageEnhance.Contrast(img).enhance(1.08)
+
+        # Slight color boost
+        img = ImageEnhance.Color(img).enhance(1.03)
+
+        # Increase sharpness
+        img = ImageEnhance.Sharpness(img).enhance(2.8)
+
+        # Unsharp Mask
+        img = img.filter(
+            ImageFilter.UnsharpMask(
+                radius=2,
+                percent=220,
+                threshold=3
+            )
+        )
+
+        # ------------------------
+
         row = i // COLS
-        
+        col = i % COLS
+
         x = PAGE_MARGIN_X + col * (img_w + IMAGE_SPACING_X)
         y = PAGE_MARGIN_Y + row * (img_h + IMAGE_SPACING_Y)
-        
-        # Paste onto canvas
+
         canvas.paste(img, (x, y))
-        
+
     pages.append(canvas)
 
-# 3. Save as PDF
+# ------------------------
+# Save PDF
+# ------------------------
+
 if pages:
+
     pages[0].save(
         OUTPUT_PDF,
         save_all=True,
         append_images=pages[1:],
-        resolution=300  # Crucial for defining physical print size (A4)
+        resolution=300,
     )
-    print(f"Successfully saved '{OUTPUT_PDF}' (A4 Landscape, 5x2 Grid)")
+
+    print(f"\n✅ PDF saved successfully!")
+    print(f"📄 File: {OUTPUT_PDF}")
+    print(f"🖼️ Images processed: {len(files)}")
+    print(f"📑 Pages created: {len(pages)}")
+
 else:
-    print("No pages were generated.")
+    print("No pages generated.")

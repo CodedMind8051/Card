@@ -8,3 +8,5 @@ retry/*
 image/*
 temp/*
 templates/*
+student_images/*
+output.pdf

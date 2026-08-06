@@ -27,7 +27,7 @@ TEMP_SCREENSHOTS = ["03_after_upload_full.png", "03b_after_ai_mode.png", "04_res
 LOG_FILE = TEMP_DIR / "run_log.txt"
 
 # ---- Resilience settings ----
-JSON_RETRY_WAIT = 300
+JSON_RETRY_WAIT = 900
 BAD_JSON_STREAK_LIMIT = 3
 INTERNET_POLL_INTERVAL = 5
 INTERNET_CHECK_HOST = "8.8.8.8"
