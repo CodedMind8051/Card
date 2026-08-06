@@ -455,7 +455,7 @@ If that happens, update the Playwright selectors in the script.
 
 Typical processing time
 
-- 20–60 seconds per image
+- 20–30 seconds per image
 
 Depends on
 

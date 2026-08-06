@@ -17,6 +17,7 @@ matches what a normal (non-browser) render would produce.
 from __future__ import annotations
 
 import json
+import shutil
 import webbrowser
 import threading
 from pathlib import Path
@@ -140,10 +141,18 @@ def api_records():
         except Exception:
             continue
         stem = sidecar.stem[:-5]  # strip "_data"
+        try:
+            st = sidecar.stat()
+            created_at = st.st_ctime
+            updated_at = st.st_mtime
+        except OSError:
+            created_at = updated_at = 0.0
         records.append({
             "name": stem,
             "student_name": (record.get("data") or {}).get("student_name", ""),
             "output_url": f"/media/{record.get('output_file', '')}",
+            "created_at": created_at,
+            "updated_at": updated_at,
         })
     return jsonify(records)
 
@@ -194,6 +203,94 @@ def api_save(name):
 
     save_record(name, record)
     return jsonify({"ok": True, "output_url": f"/media/{output_path.relative_to(BASE_DIR)}"})
+
+
+@app.route("/api/delete/<name>", methods=["POST"])
+def api_delete(name):
+    deleted = []
+    for p in (sidecar_path(name), CARD_DIR / f"{name}_filled.png"):
+        if p.exists():
+            try:
+                p.unlink()
+                deleted.append(str(p))
+            except OSError:
+                pass
+    if not deleted:
+        abort(404, description=f"No record named '{name}'")
+    return jsonify({"ok": True, "deleted": deleted})
+
+
+@app.route("/api/move/<name>", methods=["POST"])
+def api_move(name):
+    """Move only the rendered output image (card PNG) into a folder of the
+    user's choice (relative to the project root or an absolute path). The
+    editable record stays."""
+    record = load_record(name)
+    payload = request.get_json(silent=True) or {}
+    folder = (payload.get("folder") or "").strip().strip("/")
+    path = (payload.get("path") or "").strip()
+    if not folder and not path:
+        abort(400, description="A target folder is required")
+    if path:
+        dest_dir = Path(path).expanduser().resolve()
+    else:
+        dest_dir = (BASE_DIR / folder).resolve()
+        if not str(dest_dir).startswith(str(BASE_DIR.resolve()) + "/"):
+            abort(403, description="Folder must be inside the project directory")
+    if not dest_dir.is_dir():
+        abort(400, description=f"Destination is not a folder: {dest_dir}")
+
+    src = CARD_DIR / f"{name}_filled.png"
+    if not src.exists():
+        p = (BASE_DIR / record.get("output_file", "")).resolve()
+        if p.exists() and p.parent != dest_dir:
+            src = p
+        else:
+            abort(404, description=f"No rendered image found for '{name}'")
+
+    dest = dest_dir / src.name
+    shutil.move(str(src), str(dest))
+
+    # record a path the editor can serve back if possible (inside the project),
+    # otherwise keep the absolute location.
+    try:
+        output_file = str(dest.relative_to(BASE_DIR))
+    except ValueError:
+        output_file = str(dest)
+    record["output_file"] = output_file
+    save_record(name, record)
+    return jsonify({"ok": True, "output_url": f"/media/{output_file}"})
+
+
+@app.route("/api/dirs")
+def api_dirs():
+    """List the folders under a given path (used by the file-manager modal).
+    No path = project root. Converts to absolute; returns path + parent."""
+    raw = (request.args.get("path") or "").strip()
+    p = (Path(raw).expanduser() if raw else BASE_DIR).resolve()
+    if not p.is_dir():
+        abort(400, description="Not a directory")
+    try:
+        dirs = []
+        for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            if child.is_dir() and not child.name.startswith("."):
+                dirs.append(child.name)
+    except PermissionError:
+        abort(403, description="Cannot read this folder (permissions)")
+    return jsonify({"path": str(p), "parent": str(p.parent), "dirs": dirs})
+
+
+@app.route("/api/mkdir", methods=["POST"])
+def api_mkdir():
+    payload = request.get_json(silent=True) or {}
+    parent = (payload.get("parent") or "").strip()
+    name = (payload.get("name") or "").strip().strip("/")
+    if not name or "/" in name:
+        abort(400, description="Enter a simple folder name")
+    target = (Path(parent).expanduser() / name) if parent else (BASE_DIR / name)
+    target = target.resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    return jsonify({"path": str(target)})
 
 
 @app.route("/media/<path:rel_path>")

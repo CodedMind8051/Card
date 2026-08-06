@@ -183,6 +183,35 @@ async function buildCanvas() {
 
 function selectedIsPhoto() { return canvas.getActiveObject() === photoObj; }
 
+// Move the selected object with arrow keys (Shift = 10px, else 1px).
+document.addEventListener("keydown", (e) => {
+  if (!canvas || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const obj = canvas.getActiveObject();
+  if (!obj) return;
+  if (obj.isEditing) return;
+  const t = document.activeElement;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+  e.preventDefault();
+  const step = e.shiftKey ? 10 : 1;
+  const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+  const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+  obj.set({ left: obj.left + dx, top: obj.top + dy });
+  canvas.requestRenderAll();
+  if (obj === photoObj) {
+    state.layout.photo.x = Math.round(obj.left);
+    state.layout.photo.y = Math.round(obj.top);
+    syncPhotoPanel();
+  } else if (obj.name && obj.name.startsWith("field:")) {
+    const k = obj.name.slice(6);
+    if (state.layout.texts[k]) {
+      state.layout.texts[k].x = Math.round(obj.left);
+      state.layout.texts[k].y = Math.round(obj.top);
+    }
+    syncSelectedTextPanel();
+  }
+});
+
 /* ----------------------------------------------------------- objects --- */
 
 function addPhotoBox() {

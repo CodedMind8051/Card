@@ -17,7 +17,24 @@
       <span class="dot"></span>
       <h1>Cards</h1>
     </div>
+    <div class="sidebar-search">
+      <input type="text" id="card-search" placeholder="Search by student name…">
+    </div>
+    <div class="letter-filter" id="letter-filter"></div>
+    <div class="sidebar-sort">
+      <label for="card-sort">Sort</label>
+      <select id="card-sort">
+        <option value="name">By name (A–Z)</option>
+        <option value="name-desc">By name (Z–A)</option>
+        <option value="created">By created date</option>
+        <option value="updated">By updated date</option>
+      </select>
+    </div>
     <div id="card-list" class="card-list"></div>
+    <div class="sidebar-move">
+      <button id="btn-move" class="btn small" disabled>Move output image…</button>
+    </div>
+    <div class="sidebar-count" id="card-count"></div>
   </aside>
 
   <main class="workspace" id="workspace">
@@ -79,7 +96,7 @@
             <img id="reference-img" alt="Original source">
             <div id="reference-missing" class="reference-missing" hidden>Original photo not found on disk</div>
           </div>
-          <div class="reference-hint">Click the photo to crop it (uses the card photo)</div>
+          <div class="reference-hint">Scroll on the photo to zoom in / out</div>
         </aside>
       </div>
 
@@ -111,6 +128,25 @@
         <span class="modal-hint">This is the photo as it appears on the card. Rotate with ⟲ / ⟳ on the card, then crop here.</span>
       </div>
       <button id="crop-apply" class="btn primary">Use this crop</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="move-modal" hidden>
+  <div class="modal-inner move-inner">
+    <div class="modal-head">
+      <h2>Move output image to a folder</h2>
+      <button id="move-close" class="btn icon">✕</button>
+    </div>
+    <div class="move-path" id="move-path">…</div>
+    <div class="move-dirs" id="move-dirs"></div>
+    <div class="modal-foot">
+      <div class="toolbar-group">
+        <button id="move-up" class="btn">Up one folder</button>
+        <button id="move-home" class="btn">Project folder</button>
+        <button id="move-new" class="btn">New folder…</button>
+      </div>
+      <button id="move-done" class="btn primary">Move here</button>
     </div>
   </div>
 </div>

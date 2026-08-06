@@ -41,6 +41,11 @@ let refFitScale = 0;    // scale that fits the natural image into the panel
 
 const $ = (sel) => document.querySelector(sel);
 
+let allRecords = [];
+let searchText = "";
+let letterFilter = "All";
+let sortMode = "name";
+
 async function loadCardList() {
   let records;
   try {
@@ -52,9 +57,41 @@ async function loadCardList() {
     alert("Could not load the card list from the server. Check the terminal running --edit for errors.");
     return;
   }
+  allRecords = records;
+  renderCardList();
+}
+
+function matchesFilter(r) {
+  const name = (r.student_name || "").toLowerCase();
+  if (searchText && !name.includes(searchText.toLowerCase())) return false;
+  if (letterFilter !== "All") {
+    const first = (r.student_name || "").trim().charAt(0).toUpperCase();
+    if (first !== letterFilter) return false;
+  }
+  return true;
+}
+
+function sortRecords(records) {
+  const sorted = [...records];
+  const byName = (a, b) => (a.student_name || "").localeCompare(b.student_name || "", undefined, { sensitivity: "base" });
+  switch (sortMode) {
+    case "name-desc":
+      return sorted.sort((a, b) => byName(b, a));
+    case "created":
+      return sorted.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+    case "updated":
+      return sorted.sort((a, b) => (a.updated_at || 0) - (b.updated_at || 0));
+    case "name":
+    default:
+      return sorted.sort(byName);
+  }
+}
+
+function renderCardList() {
   const list = $("#card-list");
   list.innerHTML = "";
-  records.forEach((r, i) => {
+  const visible = sortRecords(allRecords.filter(matchesFilter));
+  visible.forEach((r, i) => {
     const item = document.createElement("div");
     item.className = "card-item";
     item.dataset.name = r.name;
@@ -64,10 +101,163 @@ async function loadCardList() {
       <div class="meta">
         <div class="name">${r.student_name || "(no name)"}</div>
         <div class="file">${r.name}</div>
-      </div>`;
+      </div>
+      <button class="delete-btn" title="Delete card">✕</button>`;
     item.addEventListener("click", () => selectCard(r.name));
+    item.querySelector(".delete-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteCard(r.name);
+    });
     list.appendChild(item);
   });
+  const countEl = $("#card-count");
+  if (countEl) countEl.textContent = `${visible.length} / ${allRecords.length} cards`;
+}
+
+function buildLetterFilter() {
+  const wrap = $("#letter-filter");
+  wrap.innerHTML = "";
+  const all = document.createElement("button");
+  all.className = "letter-btn active";
+  all.textContent = "All";
+  all.dataset.letter = "All";
+  all.addEventListener("click", () => setLetter("All"));
+  wrap.appendChild(all);
+  for (let c = 65; c <= 90; c++) {
+    const ch = String.fromCharCode(c);
+    const b = document.createElement("button");
+    b.className = "letter-btn";
+    b.textContent = ch;
+    b.dataset.letter = ch;
+    b.addEventListener("click", () => setLetter(ch));
+    wrap.appendChild(b);
+  }
+}
+
+function setLetter(l) {
+  letterFilter = l;
+  document.querySelectorAll(".letter-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.letter === l));
+  renderCardList();
+}
+
+$("#card-search").addEventListener("input", (e) => {
+  searchText = e.target.value;
+  renderCardList();
+});
+
+$("#card-sort").addEventListener("change", (e) => {
+  sortMode = e.target.value;
+  renderCardList();
+});
+
+async function deleteCard(name) {
+  if (!confirm(`Delete card "${name}"?\n\nThis removes the editable record and its rendered PNG from the output folder. The original photo is left untouched.`)) {
+    return;
+  }
+  let res;
+  try {
+    res = await fetch(`/api/delete/${encodeURIComponent(name)}`, { method: "POST" });
+  } catch (err) {
+    console.error("delete request failed:", err);
+    alert("Delete failed (network error).");
+    return;
+  }
+  if (!res.ok) {
+    console.error(`delete returned HTTP ${res.status}`);
+    alert(`Delete failed (HTTP ${res.status}).`);
+    return;
+  }
+  if (currentName === name) {
+    currentName = null;
+    currentLayout = null;
+    currentData = null;
+    photoObj = null;
+    textObjs = {};
+    $("#editor").hidden = true;
+    $("#empty-state").hidden = false;
+  }
+  updateMoveButton();
+  await loadCardList();
+}
+
+function updateMoveButton() {
+  $("#btn-move").disabled = !currentName;
+}
+
+let movePath = null;
+let moveParent = null;
+
+$("#btn-move").addEventListener("click", async () => {
+  if (!currentName) return;
+  await moveLoadDirs("");                 // "" = project root on the server
+  $("#move-modal").hidden = false;
+});
+$("#move-close").addEventListener("click", () => { $("#move-modal").hidden = true; });
+$("#move-home").addEventListener("click", () => moveLoadDirs(""));
+$("#move-up").addEventListener("click", () => { if (moveParent) moveLoadDirs(moveParent); });
+$("#move-done").addEventListener("click", moveOutputImage);
+$("#move-new").addEventListener("click", async () => {
+  const name = (prompt("New folder name:") || "").trim();
+  if (!name) return;
+  const res = await fetch("/api/mkdir", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parent: moveParent || "", name }),
+  });
+  if (!res.ok) { alert("Could not create the folder (HTTP " + res.status + ")."); return; }
+  const out = await res.json();
+  moveLoadDirs(out.path);
+});
+
+async function moveLoadDirs(path) {
+  const res = await fetch(`/api/dirs?path=${encodeURIComponent(path || "")}`);
+  if (!res.ok) { alert("Could not open that folder (HTTP " + res.status + ")."); return; }
+  const data = await res.json();
+  movePath = data.path;
+  moveParent = data.parent;
+  $("#move-path").textContent = data.path;
+  const list = $("#move-dirs");
+  list.innerHTML = "";
+  if (!data.dirs.length) {
+    list.innerHTML = '<div class="move-empty">No subfolders here</div>';
+  }
+  data.dirs.forEach((d) => {
+    const el = document.createElement("button");
+    el.className = "dir-row";
+    el.innerHTML = `<span class="dir-icon">📁</span><span>${d}</span>`;
+    el.addEventListener("click", () => moveLoadDirs(`${movePath}/${d}`));
+    list.appendChild(el);
+  });
+}
+
+async function moveOutputImage() {
+  if (!currentName) return;
+  if (!movePath) { alert("Pick a folder first."); return; }
+  let res;
+  try {
+    res = await fetch(`/api/move/${encodeURIComponent(currentName)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: movePath }),
+    });
+  } catch (err) {
+    console.error("move request failed:", err);
+    alert("Move failed (network error).");
+    return;
+  }
+  if (!res.ok) {
+    let msg = `Move failed (HTTP ${res.status}).`;
+    try { const dd = await res.json(); if (dd.description) msg = dd.description; } catch (e) { /* ignore */ }
+    alert(msg);
+    return;
+  }
+  const out = await res.json();
+  $("#move-modal").hidden = true;
+  $("#save-status").textContent = "Moved ✓";
+  $("#save-status").classList.add("ok");
+  const item = document.querySelector(`.card-item[data-name="${currentName}"] img`);
+  if (item) item.src = out.output_url + "?t=" + Date.now();
 }
 
 async function selectCard(name) {
@@ -90,6 +280,7 @@ async function selectCard(name) {
   sourceSize = record.source_size;
   sourceImg = null;
   sourceImgPromise = null;
+  updateMoveButton();
 
   $("#empty-state").hidden = true;
   $("#editor").hidden = false;
@@ -176,7 +367,22 @@ async function buildCanvas(record) {
     tb.anchor = spec.anchor || "la";
     tb.on("changed", () => syncFieldInputFromCanvas(key));
     tb.on("editing:exited", () => { fitTextDisplay(key, tb); canvas.requestRenderAll(); });
-    tb.on("moved", () => movedKeys.add(key));
+    tb.on("modified", () => {
+      // Fabric only emits 'moving'/'modified' (not 'moved'/'scaled'), so the
+      // end-of-drag/end-of-scale is detected here. Bake a corner-scale into the
+      // saved font size / width, or mark the key as moved so its position is
+      // read back from the canvas object on save instead of the stored layout.
+      const sx = tb.scaleX || 1, sy = tb.scaleY || 1;
+      if (Math.abs(sx - 1) > 0.001 || Math.abs(sy - 1) > 0.001) {
+        bakeScale(key, tb);
+        return;
+      }
+      const spec = currentLayout.texts[key];
+      const pt = anchorPointFromObject(key, tb);
+      if (spec && (Math.abs(pt.x - spec.x) > 0.5 || Math.abs(pt.y - spec.y) > 0.5)) {
+        movedKeys.add(key);
+      }
+    });
     tb.on("scaled", () => bakeScale(key, tb));
     canvas.add(tb);
     textObjs[key] = tb;
@@ -273,6 +479,17 @@ $("#btn-ref-zoom-out").addEventListener("click", () => {
   applyRefZoom();
 });
 $("#btn-ref-zoom-fit").addEventListener("click", () => { refZoom = 1; applyRefZoom(); });
+
+// Mouse-wheel zoom over the original photo (no click-to-crop anymore).
+$("#reference-panel .reference-body").addEventListener("wheel", (e) => {
+  const img = $("#reference-img");
+  if (!img.naturalWidth || img.hidden) return;
+  e.preventDefault();
+  const base = refZoom <= 1.001 ? 1 : refZoom;
+  refZoom = Math.min(12, Math.max(1, base * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  applyRefZoom();
+}, { passive: false });
+$("#reference-panel .reference-body").addEventListener("dblclick", () => { refZoom = 1; applyRefZoom(); });
 
 /* -------------------------------------------------- photo rendering --- */
 
@@ -615,7 +832,6 @@ function quickRotate(delta) {
 
 $("#btn-recrop").addEventListener("click", openCropModal);
 $("#btn-recrop-2").addEventListener("click", openCropModal);
-$("#reference-img").addEventListener("click", openCropModal);
 $("#crop-close").addEventListener("click", closeCropModal);
 $("#crop-reset").addEventListener("click", () => cropper && cropper.reset());
 $("#crop-apply").addEventListener("click", applyCrop);
@@ -722,6 +938,25 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// Move the selected object with the arrow keys (Shift = 10px, else 1px).
+// Works on both text fields and the photo box, and the move is saved.
+document.addEventListener("keydown", (e) => {
+  if (!canvas || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const obj = canvas.getActiveObject();
+  if (!obj) return;
+  if (obj.isEditing) return;
+  const t = document.activeElement;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+  e.preventDefault();
+  const step = e.shiftKey ? 10 : 1;
+  const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+  const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+  obj.set({ left: obj.left + dx, top: obj.top + dy });
+  if (obj.fieldKey) movedKeys.add(obj.fieldKey);
+  canvas.requestRenderAll();
+});
+
 function collectLayoutFromCanvas() {
   const layout = { photo: { ...currentLayout.photo }, texts: {} };
 
@@ -817,5 +1052,6 @@ if (typeof fabric === "undefined" || typeof Cropper === "undefined") {
     "since it loads Fabric.js/Cropper.js from a CDN."
   );
 } else {
+  buildLetterFilter();
   loadCardList();
 }
