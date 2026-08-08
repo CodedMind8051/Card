@@ -5,6 +5,7 @@ import time
 import random
 import shutil
 import socket
+import zipfile
 import argparse
 import traceback
 from pathlib import Path
@@ -12,7 +13,7 @@ from collections import deque
 from playwright.sync_api import sync_playwright
 
 from card_render import (
-    TEMPLATE_PATH, PHOTO_BOX,
+    TEMPLATE_PATH, PHOTO_BOX, TEMPLATES_DIR,
     build_default_layout, detect_face_crop_rect, render_card, load_active_template,
 )
 
@@ -25,6 +26,7 @@ COMPLETED_DIR = Path("completed")
 TEMP_DIR = Path("temp")
 TEMP_SCREENSHOTS = ["03_after_upload_full.png", "03b_after_ai_mode.png", "04_response_full.png"]
 LOG_FILE = TEMP_DIR / "run_log.txt"
+HISTORY_DIR = Path("history")  # archived template snapshots (*.zip)
 
 # ---- Resilience settings ----
 JSON_RETRY_WAIT = 900
@@ -329,7 +331,7 @@ def save_sidecar(image_name: str, data: dict, layout: dict, source_file: str, ou
     return sidecar
 
 
-def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratios=None):
+def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratios=None, enhance_photo=False):
     """Render the card for the first time and save an editable sidecar next to it.
 
     Uses the active template (if one was designed with `--new`), otherwise
@@ -351,9 +353,14 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
         return None
 
     crop_rect = detect_face_crop_rect(source_image_path, ai_ratios=ai_ratios)
-    layout["photo"]["crop"] = crop_rect
+    if crop_rect:
+        rotation = crop_rect.get("rotation") or 0
+        layout["photo"]["crop"] = {k: crop_rect[k] for k in ("x", "y", "w", "h")}
+        layout["photo"]["rotation"] = rotation
+    else:
+        layout["photo"]["crop"] = None
 
-    im = render_card(data, layout, template_path=template_path, photo_source_path=str(source_image_path))
+    im = render_card(data, layout, template_path=template_path, photo_source_path=str(source_image_path), enhance_photo=enhance_photo)
     im.save(output_path)
     print(f"  Filled card saved: {output_path}")
     if crop_rect is None:
@@ -366,7 +373,7 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
     return output_path
 
 
-def process_single_image(page, image_path: Path):
+def process_single_image(page, image_path: Path, enhance_photo=False):
     image_path_str = str(image_path.resolve())
     print(f"\n--- Processing: {image_path.name} ---")
 
@@ -485,7 +492,7 @@ def process_single_image(page, image_path: Path):
     print("  ✓ Extracted: " + " | ".join(b for b in summary_bits if b))
 
     ai_ratios = parse_bbox_ratios(data.get("student_photo_bbox"))
-    fill_template(data, image_path.name, image_path, ai_ratios=ai_ratios)
+    fill_template(data, image_path.name, image_path, ai_ratios=ai_ratios, enhance_photo=enhance_photo)
     return data
 
 
@@ -514,7 +521,7 @@ def cleanup_temp_screenshots():
             p.unlink()
 
 
-def process_image_pass(page, images, label, pass_start):
+def process_image_pass(page, images, label, pass_start, enhance_photo=False):
     total = len(images)
     done = 0
     failed = 0
@@ -543,7 +550,7 @@ def process_image_pass(page, images, label, pass_start):
         finished = False
         while not finished:
             try:
-                process_single_image(page, img_path)
+                process_single_image(page, img_path, enhance_photo=enhance_photo)
                 cleanup_temp_screenshots()
                 shutil.move(str(img_path), str(COMPLETED_DIR / img_path.name))
                 done += 1
@@ -608,7 +615,7 @@ def process_image_pass(page, images, label, pass_start):
     return done, failed, retry_images
 
 
-def scrape_main():
+def scrape_main(enhance_photo=False):
     OUTPUT_DIR.mkdir(exist_ok=True)
     CARD_DIR.mkdir(exist_ok=True)
     RECORD_DIR.mkdir(exist_ok=True)
@@ -636,7 +643,7 @@ def scrape_main():
         print(f"Found {total} image(s) to process. Estimating time after the first one...\n")
         pass_start = time.time()
 
-        done, failed, retry_images = process_image_pass(page, all_images, "Processing", pass_start)
+        done, failed, retry_images = process_image_pass(page, all_images, "Processing", pass_start, enhance_photo=enhance_photo)
 
         if retry_images:
             print(f"\n=== Restarting browser for retry of {len(retry_images)} image(s) ===")
@@ -651,7 +658,7 @@ def scrape_main():
             page = context.pages[0] if context.pages else context.new_page()
 
             retry_pass_start = time.time()
-            retry_done, retry_failed, still_failed = process_image_pass(page, retry_images, "Retry", retry_pass_start)
+            retry_done, retry_failed, still_failed = process_image_pass(page, retry_images, "Retry", retry_pass_start, enhance_photo=enhance_photo)
 
             if still_failed:
                 print(f"\n=== {len(still_failed)} image(s) still failed after retry ===")
@@ -667,13 +674,83 @@ def scrape_main():
         context.close()
 
 
+def archive_current_template(name: str) -> bool:
+    """Mark the current template design as 'old' by snapshotting everything
+    under templates/ (active_template.json + the *_template.png / *_design.json
+    files) into a zip in history/. Returns True on success."""
+    if not TEMPLATES_DIR.exists() or not any(TEMPLATES_DIR.iterdir()):
+        print(f"  Nothing to archive — {TEMPLATES_DIR} is empty.")
+        return False
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    target = HISTORY_DIR / f"{name}.zip"
+    if target.exists():
+        print(f"  {target} already exists. Pick a different name or delete it first.")
+        return False
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in sorted(TEMPLATES_DIR.rglob("*")):
+            if p.is_file():
+                zf.write(p, arcname=str(p.relative_to(TEMPLATES_DIR)))
+    print(f"  ✓ Archived current template -> {target}")
+    return True
+
+
+def restore_archive(name: str) -> bool:
+    """Use an archived template: restore history/<name>.zip back into
+    templates/ so it becomes the current working design again."""
+    target = HISTORY_DIR / f"{name}.zip"
+    if not target.exists():
+        print(f"  ✗ No archived template named '{name}' (looked for {target}).")
+        return False
+    if TEMPLATES_DIR.exists():
+        for p in TEMPLATES_DIR.iterdir():
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(target) as zf:
+        zf.extractall(str(TEMPLATES_DIR))
+    print(f"  ✓ Restored '{name}' as the current working template.")
+    return True
+
+
+def list_history() -> list[str]:
+    if not HISTORY_DIR.exists():
+        return []
+    return sorted(p.name for p in HISTORY_DIR.glob("*.zip"))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Scrape + fill student ID cards, or edit them in the browser.")
     parser.add_argument("--edit", action="store_true", help="Launch the browser editor instead of scraping.")
     parser.add_argument("--new", action="store_true", help="Design a new template in the browser (asks for a template image path).")
     parser.add_argument("--template", help="Template image or folder for --new (otherwise you are asked interactively).")
     parser.add_argument("--port", type=int, default=5000, help="Port for the --edit / --new web server (default 5000).")
+    parser.add_argument("--image-enhance", action="store_true", default=False,
+                        help="Enhance the student photo (upscale, denoise, contrast/colour/sharpening) when rendering. "
+                             "Off by default — the original photo is used as-is.")
+    parser.add_argument("--mark-old", metavar="NAME",
+                        help="Archive the current template design as a zip in history/ under NAME, then stop.")
+    parser.add_argument("--given-name", metavar="NAME",
+                        help="Restore the archived template NAME from history/ so it becomes the current working design.")
+    parser.add_argument("--current", action="store_true", default=False,
+                        help="Explicitly keep using the current working design (default behaviour; cancels --given-name).")
     args = parser.parse_args()
+
+    if args.mark_old and args.given_name:
+        print("Choose either --mark-old or --given-name, not both.")
+        return
+    if args.mark_old and args.current:
+        print("--current doesn't make sense with --mark-old; continuing to archive anyway.")
+
+    if args.mark_old:
+        if archive_current_template(args.mark_old):
+            print(f"\n  Archived designs in history/: {list_history()}")
+        return
+
+    if args.given_name and not args.current:
+        if not restore_archive(args.given_name):
+            return
 
     if args.edit and args.new:
         print("Choose one of --edit or --new, not both.")
@@ -691,7 +768,7 @@ def main():
             sys.argv += ["--port", str(args.port)]
         design_main()
     else:
-        scrape_main()
+        scrape_main(enhance_photo=args.image_enhance)
 
 
 if __name__ == "__main__":

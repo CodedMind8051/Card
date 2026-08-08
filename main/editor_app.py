@@ -188,12 +188,14 @@ def api_save(name):
 
     record["data"] = payload.get("data", record["data"])
     record["layout"] = merge_layout(record["layout"], payload.get("layout"))
+    enhance_photo = bool(payload.get("enhance_photo", False))
 
     source = resolve_source_image(record)
     im = render_card(
         record["data"], record["layout"],
         template_path=str(Path.cwd() / record_template_path(record)),
         photo_source_path=str(source) if source else None,
+        enhance_photo=enhance_photo,
     )
     CARD_DIR.mkdir(parents=True, exist_ok=True)
     RECORD_DIR.mkdir(parents=True, exist_ok=True)

@@ -169,12 +169,32 @@ PHOTO_PAD_TOP = 0.45
 PHOTO_PAD_BOTTOM = 0.65
 
 
+# Rotating the ORIGINAL image by these code corresponds to these stored layout
+# rotation values (the editor/load_cropped_photo rotates the crop clockwise by
+# `rotation` degrees). ROTATE_90_CLOCKWISE finds a face upright-ish in a photo
+# that is 90° CCW, so we correct it by rotating 90° clockwise, etc.
+_CODE_TO_DEGREES = {
+    None: 0,
+    cv2.ROTATE_90_CLOCKWISE: 90,
+    cv2.ROTATE_180: 180,
+    cv2.ROTATE_90_COUNTERCLOCKWISE: 270,
+}
+
+
 def detect_face_crop_rect(image_path: Path, ai_ratios=None):
     """
     Best-effort face detection used only to seed a *starting* crop rectangle
-    (in ORIGINAL image pixel coordinates, rotation=0) for the editor. The
-    user can freely adjust this afterwards, so it doesn't need to be exact.
-    Returns {"x","y","w","h"} or None.
+    (in ORIGINAL image pixel coordinates) plus the photo rotation for the
+    editor. The user can freely adjust this afterwards, so it doesn't need to
+    be exact.
+
+    It tries the face cascade on every _ROTATIONS orientation and keeps the one
+    where the biggest face was found (using ROTATION_CONFIDENCE_MARGIN so a 90°
+    correction only sticks when it clearly beats the upright guess) - this way a
+    sideways/tilted scanned photo starts out upright.
+
+    Returns {"x","y","w","h","rotation"} or None, all in the ORIGINAL image's
+    pixel/coordinate space (rotation is one of 0/90/180/270).
     """
     img = cv2.imread(str(image_path))
     if img is None:
@@ -192,25 +212,71 @@ def detect_face_crop_rect(image_path: Path, ai_ratios=None):
         rx, ry, rw, rh = 0, 0, w_img, h_img
 
     roi = img[ry:ry + rh, rx:rx + rw]
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-    if len(faces) == 0:
-        # no face found: just return the AI region (or whole image) as the starting crop
-        return {"x": rx, "y": ry, "w": rw, "h": rh}
+    roi_h, roi_w = roi.shape[:2]
 
-    fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+    results_by_code = {}  # code -> (face_area, (fx, fy, fw, fh)) in ROT coords
+    for code in _ROTATIONS:
+        rot = cv2.rotate(roi, code) if code is not None else roi
+        gray = cv2.cvtColor(rot, cv2.COLOR_BGR2GRAY)
+        faces = _FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        if len(faces) > 0:
+            fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+            results_by_code[code] = (fw * fh, (fx, fy, fw, fh))
+
+    if not results_by_code:
+        # no face found in any orientation: return the AI/whole region, no rotation
+        return {"x": rx, "y": ry, "w": rw, "h": rh, "rotation": 0}
+
+    baseline_area = results_by_code[None][0] if None in results_by_code else 0
+    chosen = None if None in results_by_code else max(results_by_code, key=lambda c: results_by_code[c][0])
+    for code, (area, box) in results_by_code.items():
+        if code is None:
+            continue
+        if area > baseline_area * ROTATION_CONFIDENCE_MARGIN and area > results_by_code[chosen][0]:
+            chosen = code
+
+    fx, fy, fw, fh = results_by_code[chosen][1]
     pad_side = fw * PHOTO_PAD_SIDE
     pad_top = fh * PHOTO_PAD_TOP
     pad_bottom = fh * PHOTO_PAD_BOTTOM
 
-    x0 = rx + fx - pad_side
-    y0 = ry + fy - pad_top
-    x1 = rx + fx + fw + pad_side
-    y1 = ry + fy + fh + pad_bottom
+    # padded face box in ROT coords (clamped to the rotated image)
+    x0, y0 = max(0, int(fx - pad_side)), max(0, int(fy - pad_top))
+    x1 = min(roi_w, int(fx + fw + pad_side))
+    y1 = min(roi_h, int(fy + fh + pad_bottom))
 
-    x0, y0 = max(0, int(x0)), max(0, int(y0))
-    x1, y1 = min(w_img, int(x1)), min(h_img, int(y1))
-    return {"x": x0, "y": y0, "w": max(1, x1 - x0), "h": max(1, y1 - y0)}
+    # map the box corners back into the ORIGINAL (rotation=0) ROI coordinates.
+    # inv() returns (row, col) in the un-rotated ROI for a point in the rotated
+    # image given as (rr, cc).
+    def _inv(point):
+        rr, cc = point
+        if chosen == cv2.ROTATE_90_CLOCKWISE:
+            return roi_h - 1 - cc, rr
+        if chosen == cv2.ROTATE_90_COUNTERCLOCKWISE:
+            return cc, roi_w - 1 - rr
+        if chosen == cv2.ROTATE_180:
+            return roi_h - 1 - rr, roi_w - 1 - cc
+        return rr, cc
+
+    pts = [_inv((rr, cc)) for rr in (y0, y1 - 1) for cc in (x0, x1 - 1)]
+    r_min = min(p[0] for p in pts)
+    r_max = max(p[0] for p in pts)
+    c_min = min(p[1] for p in pts)
+    c_max = max(p[1] for p in pts)
+
+    # final crop in ORIGINAL image pixel space (row->y, col->x), plus offset
+    orow0 = ry + r_min
+    orow1 = ry + r_max
+    ocol0 = rx + c_min
+    ocol1 = rx + c_max
+
+    return {
+        "x": max(0, ocol0),
+        "y": max(0, orow0),
+        "w": max(1, min(w_img, ocol1 + 1) - max(0, ocol0)),
+        "h": max(1, min(h_img, orow1 + 1) - max(0, orow0)),
+        "rotation": _CODE_TO_DEGREES[chosen],
+    }
 
 
 def enhance_photo(img: Image.Image) -> Image.Image:
@@ -261,7 +327,7 @@ def add_rounded_corners(img: Image.Image, radius: int) -> Image.Image:
     return img
 
 
-def load_cropped_photo(source_image_path, crop, rotation=0, enhance=True):
+def load_cropped_photo(source_image_path, crop, rotation=0, enhance=False):
     """Open the original image, crop to `crop` (dict x,y,w,h), rotate by
     `rotation` degrees (arbitrary angle, expand canvas), optionally enhance."""
     if not source_image_path or not Path(source_image_path).exists() or not crop:
@@ -493,9 +559,13 @@ def list_designed_templates() -> list[dict]:
 
 # ---------------------------------------------------------------- render ---
 
-def render_card(data: dict, layout: dict, template_path=TEMPLATE_PATH, photo_source_path=None):
+def render_card(data: dict, layout: dict, template_path=TEMPLATE_PATH, photo_source_path=None, enhance_photo=False):
     """Compose the final card image from `data` (field values) and `layout`
-    (positions/styles/photo box+crop). Returns a PIL.Image (RGB)."""
+    (positions/styles/photo box+crop). Returns a PIL.Image (RGB).
+
+    Set enhance_photo=True to apply photo enhancement (upscale, denoise,
+    contrast/colour/CLAHE/sharpen) to the student photo; otherwise the photo
+    is used as-is."""
     if not Path(template_path).exists():
         raise FileNotFoundError(f"Template not found at {template_path}")
     im = Image.open(template_path).convert("RGB")
@@ -504,7 +574,7 @@ def render_card(data: dict, layout: dict, template_path=TEMPLATE_PATH, photo_sou
     photo_spec = layout.get("photo", {})
     crop = photo_spec.get("crop")
     if photo_source_path and crop:
-        photo = load_cropped_photo(photo_source_path, crop, rotation=photo_spec.get("rotation", 0))
+        photo = load_cropped_photo(photo_source_path, crop, rotation=photo_spec.get("rotation", 0), enhance=enhance_photo)
         if photo is not None:
             px, py = int(photo_spec.get("x", PHOTO_BOX[0])), int(photo_spec.get("y", PHOTO_BOX[1]))
             pw, ph = int(photo_spec.get("width", PHOTO_BOX[2])), int(photo_spec.get("height", PHOTO_BOX[3]))

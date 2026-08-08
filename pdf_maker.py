@@ -1,5 +1,14 @@
 from PIL import Image, ImageEnhance, ImageFilter
 import os
+import argparse
+
+parser = argparse.ArgumentParser(description="Combine rendered cards into an A4 PDF.")
+parser.add_argument("--enhance-image", action="store_true", default=False,
+                    help="Enhance each card image (contrast/colour/sharpness) before placing it in the PDF. "
+                         "Off by default — images are used as-is.")
+args = parser.parse_args()
+
+enhance = args.enhance_image
 
 # ------------------------
 # CONFIGURATION
@@ -81,26 +90,27 @@ for start in range(0, len(files), IMAGES_PER_PAGE):
         img = img.resize((img_w, img_h), RESAMPLE)
 
         # ------------------------
-        # Image Enhancement
+        # Image Enhancement (only with --enhance-image)
         # ------------------------
 
-        # Slight contrast boost
-        img = ImageEnhance.Contrast(img).enhance(1.08)
+        if enhance:
+            # Slight contrast boost
+            img = ImageEnhance.Contrast(img).enhance(1.08)
 
-        # Slight color boost
-        img = ImageEnhance.Color(img).enhance(1.03)
+            # Slight color boost
+            img = ImageEnhance.Color(img).enhance(1.03)
 
-        # Increase sharpness
-        img = ImageEnhance.Sharpness(img).enhance(2.8)
+            # Increase sharpness
+            img = ImageEnhance.Sharpness(img).enhance(2.8)
 
-        # Unsharp Mask
-        img = img.filter(
-            ImageFilter.UnsharpMask(
-                radius=2,
-                percent=220,
-                threshold=3
+            # Unsharp Mask
+            img = img.filter(
+                ImageFilter.UnsharpMask(
+                    radius=2,
+                    percent=220,
+                    threshold=3
+                )
             )
-        )
 
         # ------------------------
 

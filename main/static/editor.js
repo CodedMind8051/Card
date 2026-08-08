@@ -1053,7 +1053,7 @@ async function saveCard() {
     res = await fetch(`/api/save/${encodeURIComponent(currentName)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data: currentData, layout }),
+      body: JSON.stringify({ data: currentData, layout, enhance_photo: $("#ctl-enhance").checked }),
     });
   } catch (err) {
     console.error("save request failed:", err);
