@@ -205,6 +205,40 @@ def api_save(name):
     return jsonify({"ok": True, "output_url": f"/media/{output_path.relative_to(BASE_DIR)}"})
 
 
+@app.route("/api/upload_photo/<name>", methods=["POST"])
+def api_upload_photo(name):
+    """Replace a card's student photo with the uploaded file. Saves it under the
+    project's temp/uploads folder, records the new source path for re-rendering,
+    and resets the crop so the user can re-crop the fresh image."""
+    record = load_record(name)
+    f = request.files.get("photo")
+    if not f or not f.filename:
+        abort(400, description="No photo file was uploaded")
+
+    from PIL import Image
+    from werkzeug.utils import secure_filename
+    image_dir = TEMP_DIR / "uploads"
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = Path(secure_filename(f.filename)).suffix.lower() or ".jpg"
+    target = image_dir / f"{name}_photo{ext}"
+    f.save(str(target))
+
+    try:
+        with Image.open(target) as im:
+            width, height = im.size
+    except Exception:
+        abort(400, description="Uploaded file is not a readable image")
+
+    rel = str(target.relative_to(BASE_DIR))
+    record["source_file"] = rel
+    record["layout"]["photo"]["crop"] = {"x": 0, "y": 0, "w": width, "h": height}
+    record["layout"]["photo"]["rotation"] = 0
+    save_record(name, record)
+
+    return jsonify({"ok": True, "url": f"/media/{rel}", "width": width, "height": height})
+
+
 @app.route("/api/delete/<name>", methods=["POST"])
 def api_delete(name):
     deleted = []

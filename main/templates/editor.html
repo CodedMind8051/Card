@@ -125,7 +125,9 @@
     <div class="modal-foot">
       <div class="toolbar-group">
         <button id="crop-reset" class="btn">Reset</button>
-        <span class="modal-hint">This is the photo as it appears on the card. Rotate with ⟲ / ⟳ on the card, then crop here.</span>
+        <button id="crop-upload" class="btn">Use a different photo…</button>
+        <span class="modal-hint">This is the photo as it appears on the card. Rotate with ⟲ / ⟳ on the card, then crop here. You can also pick a completely different student photo to replace the current one.</span>
+        <input type="file" id="crop-file" accept="image/*" hidden>
       </div>
       <button id="crop-apply" class="btn primary">Use this crop</button>
     </div>

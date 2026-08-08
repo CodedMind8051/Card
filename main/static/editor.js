@@ -835,6 +835,12 @@ $("#btn-recrop-2").addEventListener("click", openCropModal);
 $("#crop-close").addEventListener("click", closeCropModal);
 $("#crop-reset").addEventListener("click", () => cropper && cropper.reset());
 $("#crop-apply").addEventListener("click", applyCrop);
+$("#crop-upload").addEventListener("click", () => $("#crop-file").click());
+$("#crop-file").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (file) uploadNewPhoto(file);
+  e.target.value = "";
+});
 
 // Map a crop rectangle picked on the output-derived photo (raw
 // cropped+rotated, as it appears on the card) back into ORIGINAL source
@@ -868,8 +874,6 @@ function mapCropToSourceRect(rect, crop, rotation) {
 }
 
 async function openCropModal() {
-  const modal = $("#crop-modal");
-  const img = $("#crop-image");
   const spec = currentLayout.photo;
   const crop = spec.crop;
 
@@ -890,28 +894,78 @@ async function openCropModal() {
     return;
   }
 
-  // Build the photo exactly as it appears on the output card (cropped +
-  // rotated), not the full original image.
+  $("#crop-modal").hidden = false;
+  showCropPreview();
+}
+
+function initCropperOn(img) {
+  if (cropper) cropper.destroy();
+  cropper = new Cropper(img, {
+    viewMode: 1,
+    autoCropArea: 1,
+    background: false,
+  });
+}
+
+function showCropPreview() {
+  const img = $("#crop-image");
   let raw;
   try {
-    raw = renderCroppedPhoto(sourceImg, crop, spec.rotation || 0);
+    raw = renderCroppedPhoto(sourceImg, currentLayout.photo.crop, currentLayout.photo.rotation || 0);
   } catch (err) {
-    console.error("openCropModal render failed:", err);
+    console.error("crop preview render failed:", err);
+    return;
+  }
+  img.onload = () => initCropperOn(img);
+  img.removeAttribute("src");
+  img.src = raw.toDataURL("image/png");
+}
+
+async function uploadNewPhoto(file) {
+  const fd = new FormData();
+  fd.append("photo", file);
+
+  let res;
+  try {
+    res = await fetch(`/api/upload_photo/${encodeURIComponent(currentName)}`, { method: "POST", body: fd });
+  } catch (err) {
+    console.error("photo upload failed:", err);
+    alert("Upload failed (network error). Check the terminal running --edit.");
+    return;
+  }
+  if (!res.ok) {
+    alert("Upload failed (HTTP " + res.status + "). Check the terminal running --edit.");
+    return;
+  }
+  const out = await res.json();
+
+  // swap client-side state to the new photo and reset the crop to full image
+  sourceImg = null;
+  sourceImgPromise = null;
+  try {
+    await loadSourceImage(out.url);
+  } catch (err) {
+    console.error("uploaded photo could not be loaded:", err);
+    alert("The uploaded photo couldn't be loaded.");
     return;
   }
 
-  modal.hidden = false;
-  const initCropper = () => {
-    if (cropper) cropper.destroy();
-    cropper = new Cropper(img, {
-      viewMode: 1,
-      autoCropArea: 1,
-      background: false,
-    });
-  };
-  img.onload = initCropper;
-  img.removeAttribute("src");
-  img.src = raw.toDataURL("image/png");
+  currentLayout.photo.crop = { x: 0, y: 0, w: out.width, h: out.height };
+  currentLayout.photo.rotation = 0;
+
+  // refresh the reference panel
+  const ref = $("#reference-img");
+  ref.hidden = false;
+  ref.src = out.url;
+  $("#reference-missing").hidden = true;
+  $("#btn-recrop-2").disabled = false;
+
+  renderPhotoObject();
+  showCropPreview();
+
+  const status = $("#save-status");
+  status.textContent = "New photo loaded — crop it, then Save.";
+  status.classList.remove("ok");
 }
 
 function closeCropModal() {
