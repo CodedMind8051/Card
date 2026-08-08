@@ -675,42 +675,89 @@ def scrape_main(enhance_photo=False):
 
 
 def archive_current_template(name: str) -> bool:
-    """Mark the current template design as 'old' by snapshotting everything
-    under templates/ (active_template.json + the *_template.png / *_design.json
-    files) into a zip in history/. Returns True on success."""
-    if not TEMPLATES_DIR.exists() or not any(TEMPLATES_DIR.iterdir()):
-        print(f"  Nothing to archive — {TEMPLATES_DIR} is empty.")
-        return False
+    """Mark the current batch as 'old' by snapshotting EVERYTHING needed to
+    work on / edit it later into history/<name>.zip:
+      image/  - unprocessed input photos
+      output/ - rendered cards (output/cards) + editable records (output/records)
+      completed/ - processed photos (the originals moved after a successful pass)
+      retry/  - photos that failed and are queued for a retry
+      temp/   - run logs / screenshots
+      templates/ + template.png - the template design + base fallback image
+    The zip keeps the project's top-level layout, so `--given-name` can put it
+    all back exactly where it belongs. Returns True on success."""
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     target = HISTORY_DIR / f"{name}.zip"
     if target.exists():
         print(f"  {target} already exists. Pick a different name or delete it first.")
         return False
+
+    paths = ["image", "output", "completed", "retry", "temp", "templates", "template.png"]
+    count = 0
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
-        for p in sorted(TEMPLATES_DIR.rglob("*")):
-            if p.is_file():
-                zf.write(p, arcname=str(p.relative_to(TEMPLATES_DIR)))
-    print(f"  ✓ Archived current template -> {target}")
+        for rel in paths:
+            p = Path(rel)
+            if not p.exists():
+                continue
+            if p.is_dir():
+                for f in sorted(p.rglob("*")):
+                    if f.is_file():
+                        zf.write(f, arcname=str(f))
+                        count += 1
+            else:
+                zf.write(p, arcname=str(p))
+                count += 1
+    print(f"  ✓ Archived current batch ({count} files) -> {target}")
+
+    # The batch is now safely stored in the zip — clear it from the workspace so
+    # you can start a fresh batch. Everything is restored later with --given-name.
+    cleaned = []
+    for rel in paths:
+        p = Path(rel)
+        if p.is_dir():
+            shutil.rmtree(p)
+            cleaned.append(str(p) + "/")
+        elif p.exists():
+            p.unlink()
+            cleaned.append(str(p))
+    if cleaned:
+        print("  ✓ Removed from workspace:")
+        for c in cleaned:
+            print(f"    - {c}")
     return True
 
 
 def restore_archive(name: str) -> bool:
-    """Use an archived template: restore history/<name>.zip back into
-    templates/ so it becomes the current working design again."""
+    """Use an archived batch: restore history/<name>.zip back into the project
+    root, replacing the current work, so you can continue editing/processing
+    that batch exactly where you left off."""
     target = HISTORY_DIR / f"{name}.zip"
     if not target.exists():
-        print(f"  ✗ No archived template named '{name}' (looked for {target}).")
+        print(f"  ✗ No archived batch named '{name}' (looked for {target}).")
         return False
-    if TEMPLATES_DIR.exists():
-        for p in TEMPLATES_DIR.iterdir():
-            if p.is_dir():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
-    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+
     with zipfile.ZipFile(target) as zf:
-        zf.extractall(str(TEMPLATES_DIR))
-    print(f"  ✓ Restored '{name}' as the current working template.")
+        top_level = sorted({n.split("/", 1)[0] for n in zf.namelist() if n})
+
+    removed = []
+    for t in top_level:
+        p = Path.cwd() / t
+        if p.is_dir():
+            shutil.rmtree(p)
+            removed.append(str(p) + "/")
+        elif p.exists():
+            p.unlink()
+            removed.append(str(p))
+
+    if removed:
+        print("  Restoring will replace the current:")
+        for r in removed:
+            print(f"    - {r}")
+        print("  (If you still need the current batch, archive it first with --mark-old).")
+
+    with zipfile.ZipFile(target) as zf:
+        zf.extractall(Path.cwd())
+
+    print(f"  ✓ Restored archived batch '{name}'. You can continue your work now.")
     return True
 
 
@@ -730,11 +777,12 @@ def main():
                         help="Enhance the student photo (upscale, denoise, contrast/colour/sharpening) when rendering. "
                              "Off by default — the original photo is used as-is.")
     parser.add_argument("--mark-old", metavar="NAME",
-                        help="Archive the current template design as a zip in history/ under NAME, then stop.")
+                        help="Archive the ENTIRE current batch (image/, output/, completed/, retry/, temp/, templates/, template.png) "
+                             "as a zip in history/ under NAME, then stop.")
     parser.add_argument("--given-name", metavar="NAME",
-                        help="Restore the archived template NAME from history/ so it becomes the current working design.")
+                        help="Restore the archived batch NAME from history/ back into the project so you can continue it.")
     parser.add_argument("--current", action="store_true", default=False,
-                        help="Explicitly keep using the current working design (default behaviour; cancels --given-name).")
+                        help="Explicitly keep using the current working state (default behaviour; cancels --given-name).")
     args = parser.parse_args()
 
     if args.mark_old and args.given_name:

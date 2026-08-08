@@ -388,9 +388,18 @@ def _autofit(draw, text, x, y, max_width, font_path, base_size, color, min_size,
     draw.text((x, y), text, font=font, fill=color, anchor=anchor)
 
 
-def _fitted(draw, text, x, y, max_width, max_height, font_path, base_size, color, min_size):
-    """Exact copy of fixedCard.py draw_fitted_text(): word-wrap the address,
-    shrink by 2pt until it fits max_height, draw with anchor 'la'."""
+def _fitted(draw, text, x, y, max_width, max_height, font_path, base_size, color, min_size,
+            align="left"):
+    """Word-wrap the text, shrink by 2pt until it fits max_height, then draw
+    each line aligned within the [x, x+max_width] box. `align` is left/center/right
+    (default left), matching how the designer's textbox lays text out."""
+    def anchor_for(a):
+        return {"left": "la", "center": "ma", "right": "ra"}.get(a or "left", "la")
+
+    frac = {"left": 0.0, "center": 0.5, "right": 1.0}.get(align or "left", 0.0)
+    ax = x + frac * max_width
+    anch = anchor_for(align)
+
     def wrap_lines(font):
         lines = text.split("\n")
         wrapped = []
@@ -419,7 +428,7 @@ def _fitted(draw, text, x, y, max_width, max_height, font_path, base_size, color
         total_height = len(wrapped) * line_height
         if total_height <= max_height:
             for i, wline in enumerate(wrapped):
-                draw.text((x, y + i * line_height), wline, font=font, fill=color, anchor="la")
+                draw.text((ax, y + i * line_height), wline, font=font, fill=color, anchor=anch)
             return
         font_size -= 2
 
@@ -428,7 +437,7 @@ def _fitted(draw, text, x, y, max_width, max_height, font_path, base_size, color
     line_height = bbox[3] - bbox[1] + 4
     wrapped = wrap_lines(font)
     for i, wline in enumerate(wrapped):
-        draw.text((x, y + i * line_height), wline, font=font, fill=color, anchor="la")
+        draw.text((ax, y + i * line_height), wline, font=font, fill=color, anchor=anch)
 
 
 def draw_text_box(draw, text, spec, font_bold=FONT_BOLD, font_regular=FONT_REGULAR):
@@ -455,12 +464,22 @@ def draw_text_box(draw, text, spec, font_bold=FONT_BOLD, font_regular=FONT_REGUL
 
     if multiline:
         _fitted(draw, text, x, y, width or 500, max_height or 200,
-                font_path, base_size, color, min_size)
+                font_path, base_size, color, min_size, align=spec.get("align", "left"))
     else:
-        # Horizontal origin follows the user's chosen align (l/m/r), while the
-        # vertical origin is kept from the stored anchor (a=ascender, m=middle).
-        _autofit(draw, text, x, y, width or 500, font_path, base_size,
-                 color, min_size, _resolve_anchor(anchor, spec.get("align", "left")))
+        align = spec.get("align", "left")
+        # Designed fields (anchor "la") are treated as a TOP-LEFT box: the user's
+        # alignment moves the text within [x, x+width]. Anchor-point fields
+        # ("mm"/"lm", the hard-coded template) already carry that offset in x, so
+        # they render at (x, y) directly.
+        x_draw = x
+        if anchor == "la":
+            box_w = width or 500
+            if align == "center":
+                x_draw = x + box_w / 2
+            elif align == "right":
+                x_draw = x + box_w
+        _autofit(draw, text, x_draw, y, width or 500, font_path, base_size,
+                 color, min_size, _resolve_anchor(anchor, align))
     return
 
     # ---- legacy top-left-box path (specs saved without an anchor) ----
