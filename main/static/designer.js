@@ -233,6 +233,32 @@ function addPhotoBox() {
   canvas.sendToBack(rect);
 }
 
+function hexOk(h) {
+  return /^#[0-9a-fA-F]{6}$/.test(h || "") ? h : null;
+}
+function applyTextFill(obj, spec) {
+  const colors = (spec.colors || []).map(hexOk).filter(Boolean);
+  if (colors.length >= 2) {
+    const pcts = (spec.grad_stops || []).slice(0, colors.length);
+    const offsets = colors.map((c, i) =>
+      pcts[i] != null ? Math.max(0, Math.min(1, Number(pcts[i]) / 100)) : i / (colors.length - 1)
+    );
+    const vertical = spec.grad_axis === "vertical";
+    const w = Math.max(1, obj.width || 100);
+    const h = Math.max(1, obj.height || obj.fontSize || 100);
+    obj.set("fill", {
+      type: "linear", gradientUnits: "pixels",
+      coords: vertical
+        ? { x1: 0, y1: 0, x2: 0, y2: h }
+        : { x1: 0, y1: 0, x2: w, y2: 0 },
+      colorStops: colors.map((c, i) => ({ offset: offsets[i], color: c })),
+    });
+  } else {
+    obj.set("fill", spec.color || "#000000");
+  }
+  obj.initDimensions && obj.initDimensions();
+}
+
 function addTextObj(key) {
   const spec = state.layout.texts[key] || {};
   const sample = (state.dummy[key] || labelFor(key) + " sample");
@@ -262,6 +288,7 @@ function addTextObj(key) {
   tb.on("editing:exited", () => { bakeTextObj(key, tb); canvas.requestRenderAll(); });
   canvas.add(tb);
   textObjs[key] = tb;
+  applyTextFill(tb, spec);
   canvas.bringToFront(tb);
 }
 
@@ -358,6 +385,7 @@ function syncSelectedTextPanel() {
   $("#text-size").value = Math.round(obj.fontSize * (obj.scaleY || 1));
   $("#text-min").value = spec.min_font_size || 12;
   $("#text-color").value = spec.color || "#000000";
+  syncGradPanel(spec);
   $("#text-bold").checked = !!spec.bold;
   $("#text-multiline").checked = !!spec.multiline;
   $("#text-align").value = spec.align || "left";
@@ -424,9 +452,85 @@ $("#text-min").addEventListener("input", (e) => {
 });
 $("#text-color").addEventListener("input", (e) => {
   const o = textObjs[selectedKey]; if (!o) return;
-  o.set("fill", e.target.value);
   state.layout.texts[selectedKey].color = e.target.value;
+  delete state.layout.texts[selectedKey].colors;
+  delete state.layout.texts[selectedKey].grad_stops;
+  delete state.layout.texts[selectedKey].grad_axis;
+  syncGradPanel(state.layout.texts[selectedKey]);
+  applyTextFill(o, state.layout.texts[selectedKey]);
   canvas.requestRenderAll();
+});
+const GRAD_MAX = 4;
+function gradAxisValue() {
+  return document.querySelector("#grad-axis button.active").dataset.axis;
+}
+function setGradAxis(axis) {
+  const target = axis === "vertical" ? "vertical" : "horizontal";
+  document.querySelectorAll("#grad-axis button").forEach((b) => {
+    b.classList.toggle("active", b.dataset.axis === target);
+  });
+}
+function gradBuildRow(idx, color, stop, forceEmpty) {
+  const row = document.createElement("div");
+  row.className = "grow" + (forceEmpty || color == null ? " empty" : "");
+  row.innerHTML =
+    '<span class="g-no">' + (idx + 1) + "</span>" +
+    '<input type="color" class="g-color" value="' + (color || "#000000") + '">' +
+    '<input type="number" class="g-stop" min="0" max="100" step="1" value="' + (stop == null ? "" : stop) + '">' +
+    '<span>%</span>' +
+    '<button type="button" class="g-on" title="Enable/disable this stop">On</button>';
+  row.querySelector(".g-color").addEventListener("change", gradChanged);
+  row.querySelector(".g-stop").addEventListener("input", gradChanged);
+  row.querySelector(".g-on").addEventListener("click", () => {
+    row.classList.toggle("empty");
+    gradChanged();
+  });
+  return row;
+}
+function clearGradList() {
+  const list = $("#grad-list");
+  while (list.firstChild) list.removeChild(list.firstChild);
+}
+function syncGradPanel(spec) {
+  if (!spec) return;
+  setGradAxis(spec.grad_axis || "horizontal");
+  clearGradList();
+  const colors = spec.colors || [];
+  const stops = spec.grad_stops || [];
+  for (let i = 0; i < GRAD_MAX; i++) {
+    const has = i < colors.length && colors[i];
+    $("#grad-list").appendChild(gradBuildRow(i, has ? colors[i] : null, stops[i], !has));
+  }
+}
+function gradChanged() {
+  const o = textObjs[selectedKey]; if (!o) return;
+  const spec = state.layout.texts[selectedKey];
+  const rows = [...document.querySelectorAll("#grad-list .grow")];
+  const colors = [], stops = [];
+  for (const r of rows) {
+    const empty = r.classList.contains("empty");
+    if (empty) continue;
+    const c = r.querySelector(".g-color").value;
+    if (!hexOk(c)) continue;
+    const s = r.querySelector(".g-stop").value;
+    colors.push(c);
+    stops.push(s === "" ? null : Number(s));
+  }
+  if (colors.length < 2) {
+    delete spec.colors; delete spec.grad_stops; delete spec.grad_axis;
+  } else {
+    spec.colors = colors;
+    spec.grad_stops = stops.slice(0, colors.length);
+    spec.grad_axis = gradAxisValue();
+  }
+  applyTextFill(o, spec);
+  canvas.requestRenderAll();
+}
+document.querySelectorAll("#grad-axis button").forEach((b) => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("#grad-axis button").forEach((x) => x.classList.toggle("active", x === b));
+    gradChanged();
+  });
 });
 $("#text-bold").addEventListener("change", (e) => {
   const o = textObjs[selectedKey]; if (!o) return;

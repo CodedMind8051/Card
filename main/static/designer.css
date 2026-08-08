@@ -66,6 +66,23 @@ button, input, select{ font-family:inherit; }
 .row{ display:flex; align-items:center; gap:14px; }
 .row label{ flex-direction:row; align-items:center; }
 .row label.check{ gap:6px; cursor:pointer; }
+.grad-box .grad-controls{ display:flex; flex-direction:column; gap:10px; width:100%; }
+.grad-head label{ font-size:11px; font-weight:700; color:var(--accent); }
+.grad-axis-row{ display:flex; align-items:center; gap:10px; }
+.grad-axis-row > label{ font-size:11px; color:var(--text-dim); flex:1; }
+.seg-switch{ display:inline-flex; border:1px solid var(--border,#555); border-radius:6px; overflow:hidden; }
+.seg-switch button{ width:38px; height:28px; border:0; border-right:1px solid var(--border,#555); background:transparent; color:var(--text); cursor:pointer; font-size:15px; line-height:1; }
+.seg-switch button:last-child{ border-right:0; }
+.seg-switch button.active{ background:var(--accent); color:#fff; }
+.grad-list{ display:grid; grid-template-columns:1fr; gap:6px; }
+.grow{ display:flex; align-items:center; gap:7px; padding:6px 8px; border:1px solid var(--border,#2a2a2a); border-radius:6px; background:rgba(255,255,255,.04); }
+.grow.empty{ opacity:.45; }
+.grow .g-no{ width:18px; font-size:12px; color:var(--text-dim); text-align:center; }
+.grow .g-color{ width:38px; height:30px; padding:1px; border:1px solid var(--border,#555); background:#000; }
+.grow .g-stop{ width:60px; }
+.grow span{ font-size:12px; color:var(--text-dim); }
+.grow .g-on{ font-size:11px; padding:0 8px; height:26px; border:1px solid var(--border,#555); background:transparent; color:var(--text-dim); cursor:pointer; border-radius:5px; margin-left:auto; }
+.grow.empty .g-on{ color:var(--accent); }
 input[type=number], input[type=text]{
   background:var(--panel-3); border:1px solid var(--line); color:var(--text);
   border-radius:6px; padding:6px 8px; width:100%;

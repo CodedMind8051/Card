@@ -96,6 +96,23 @@
           <div class="row">
             <label>Color <input type="color" id="text-color"></label>
           </div>
+          <div class="row grad-box">
+            <div class="grad-head">
+              <label for="grad-axis">Text gradient</label>
+              <span class="hint">Set up to 4 colour stops — each has a colour and a position % along
+                the chosen direction. Leave a stop empty to ignore it; use 2+ to tint the text.</span>
+            </div>
+            <div class="grad-controls">
+              <div class="grad-axis-row">
+                <label for="grad-axis">Direction</label>
+                <div class="axis-switch" id="grad-axis">
+                  <button type="button" data-axis="horizontal" class="active">→</button>
+                  <button type="button" data-axis="vertical">↕</button>
+                </div>
+              </div>
+              <div id="grad-list" class="glist"><!-- 4 fixed stops rendered by JS --></div>
+            </div>
+          </div>
           <div class="row">
             <label class="check"><input type="checkbox" id="text-bold"> Bold</label>
             <label class="check"><input type="checkbox" id="text-multiline"> Wrap lines</label>

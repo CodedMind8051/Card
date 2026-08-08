@@ -373,9 +373,77 @@ def _resolve_anchor(anchor: str, align: str) -> str:
     return h + v
 
 
-def _autofit(draw, text, x, y, max_width, font_path, base_size, color, min_size, anchor):
-    """Exact copy of fixedCard.py draw_autofit_text(): single-line, shrink
-    by 1pt until it fits max_width, draw with the given PIL anchor."""
+def _build_grad(spec):
+    """Turn a text spec into a gradient descriptor, or None for a plain colour.
+
+    `colors` (>=2 hex strings) plus optional `grad_stops` (percentage list, same
+    length) and `grad_axis` ("horizontal"/"vertical") describe the blend. Without
+    explicit stops the colours are spread evenly along the axis."""
+    colors = spec.get("colors")
+    if not colors or len(colors) < 2:
+        return None
+    stops = spec.get("grad_stops")
+    if stops and len(stops) == len(colors):
+        fracs = [max(0.0, min(1.0, float(s) / 100.0)) for s in stops]
+    else:
+        fracs = [i / (len(colors) - 1) for i in range(len(colors))]
+    axis = "vertical" if spec.get("grad_axis") == "vertical" else "horizontal"
+    return {
+        "axis": axis,
+        "stops": sorted(zip(fracs, [hex_to_rgb(c) for c in colors])),
+    }
+
+
+def _grad_at(stops, t):
+    """Colour at normalized position t (0..1) across the given sorted stops,
+    linearly blending between the nearest pair. Clamps outside [0,1]."""
+    if t <= stops[0][0]:
+        return stops[0][1]
+    if t >= stops[-1][0]:
+        return stops[-1][1]
+    for i in range(len(stops) - 1):
+        f0, c0 = stops[i]
+        f1, c1 = stops[i + 1]
+        if f0 <= t <= f1:
+            denom = f1 - f0
+            frac = 0.0 if denom == 0 else (t - f0) / denom
+            return tuple(int(a + (b - a) * frac) for a, b in zip(c0, c1))
+    return stops[-1][1]
+
+
+def _paste_layer(draw, layer):
+    """Blend an RGBA glyph layer onto the target image at (0,0)."""
+    draw._image.paste(layer, (0, 0), layer)
+
+
+def _recolor_gradient_layer(layer, stops, axis):
+    """Recolour every opaque glyph pixel by its position along the chosen axis,
+    using the gradient stops. Works on both single- and multi-line text and
+    shades *within* each letter (a true vertical/horizontal gradient)."""
+    a = np.array(layer, copy=True)
+    if a.shape[2] == 4:
+        alpha = a[..., 3]
+        ys, xs = np.where(alpha > 0)
+        if len(ys) == 0:
+            return layer
+        if axis == "vertical":
+            lo, hi = int(ys.min()), int(ys.max())
+            s = (ys - lo) / max(1.0, float(hi - lo))
+        else:
+            lo, hi = int(xs.min()), int(xs.max())
+            s = (xs - lo) / max(1.0, float(hi - lo))
+        for yy, xx, tt in zip(ys.tolist(), xs.tolist(), s.tolist()):
+            c = _grad_at(stops, tt)
+            a[yy, xx, 0], a[yy, xx, 1], a[yy, xx, 2] = c[0], c[1], c[2]
+        return Image.fromarray(a)
+    return layer
+
+
+def _autofit(draw, text, x, y, max_width, font_path, base_size, color, min_size, anchor,
+             grad=None):
+    """Single-line, shrink by 1pt until it fits max_width and draw. With an
+    N-colour gradient (`grad`) the glyphs are recoloured pixel-by-pixel along the
+    gradient's axis (so a vertical gradient shades inside each letter)."""
     font_size = base_size
     font = ImageFont.truetype(font_path, font_size)
     while font_size > min_size:
@@ -385,59 +453,83 @@ def _autofit(draw, text, x, y, max_width, font_path, base_size, color, min_size,
             break
         font_size -= 1
         font = ImageFont.truetype(font_path, font_size)
-    draw.text((x, y), text, font=font, fill=color, anchor=anchor)
+
+    if not grad:
+        draw.text((x, y), text, font=font, fill=color, anchor=anchor)
+        return
+    if not text:
+        return
+
+    layer = Image.new("RGBA", (int(x + max_width + 60), int(y + base_size * 3 + 60)), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).text((x, y), text, font=font, fill=(255, 255, 255, 255), anchor=anchor)
+    layer = _recolor_gradient_layer(layer, grad["stops"], grad["axis"])
+    _paste_layer(draw, layer)
 
 
 def _fitted(draw, text, x, y, max_width, max_height, font_path, base_size, color, min_size,
-            align="left"):
+            align="left", grad=None):
     """Word-wrap the text, shrink by 2pt until it fits max_height, then draw
-    each line aligned within the [x, x+max_width] box. `align` is left/center/right
-    (default left), matching how the designer's textbox lays text out."""
-    def anchor_for(a):
-        return {"left": "la", "center": "ma", "right": "ra"}.get(a or "left", "la")
-
+    each line aligned within the [x, x+max_width] box. With a gradient, a
+    horizontal axis tints each glyph by its x position; a vertical axis shades
+    each whole line by its vertical position."""
     frac = {"left": 0.0, "center": 0.5, "right": 1.0}.get(align or "left", 0.0)
     ax = x + frac * max_width
-    anch = anchor_for(align)
 
     def wrap_lines(font):
-        lines = text.split("\n")
-        wrapped = []
-        for line in lines:
-            words = line.split()
-            current = ""
-            for word in words:
-                test = (current + " " + word).strip()
+        out = []
+        for para in text.split("\n"):
+            cur = []
+            for word in para.split():
+                test = " ".join(cur + [word]).strip()
                 test_bbox = font.getbbox(test)
-                if test_bbox[2] - test_bbox[0] <= max_width:
-                    current = test
+                if test_bbox[2] - test_bbox[0] <= max_width or not cur:
+                    cur.append(word)
                 else:
-                    if current:
-                        wrapped.append(current)
-                    current = word
-            if current:
-                wrapped.append(current)
-        return wrapped
+                    out.append(cur)
+                    cur = [word]
+            if cur:
+                out.append(cur)
+        if not out:
+            out = [[]]
+        return out
 
     font_size = base_size
-    while font_size > min_size:
+    wrapped = []
+    while True:
         font = ImageFont.truetype(font_path, font_size)
         bbox = font.getbbox("Ay")
         line_height = bbox[3] - bbox[1] + 4
         wrapped = wrap_lines(font)
-        total_height = len(wrapped) * line_height
-        if total_height <= max_height:
-            for i, wline in enumerate(wrapped):
-                draw.text((ax, y + i * line_height), wline, font=font, fill=color, anchor=anch)
-            return
+        if len(wrapped) * line_height <= max_height or font_size <= min_size:
+            break
         font_size -= 2
 
-    font = ImageFont.truetype(font_path, font_size)
-    bbox = font.getbbox("Ay")
-    line_height = bbox[3] - bbox[1] + 4
-    wrapped = wrap_lines(font)
-    for i, wline in enumerate(wrapped):
-        draw.text((ax, y + i * line_height), wline, font=font, fill=color, anchor=anch)
+    if grad:
+        block_h = len(wrapped) * line_height
+        layer = Image.new("RGBA",
+                          (int(x + max_width + 60), int(y + block_h + line_height + 60)),
+                          (0, 0, 0, 0))
+        ld = ImageDraw.Draw(layer)
+        y_cursor = y
+        for line in wrapped:
+            line_txt = " ".join(line)
+            line_w = font.getlength(line_txt)
+            left = {"left": 0, "center": line_w / 2, "right": line_w}.get(align or "left", 0)
+            cx = ax - left
+            ld.text((cx, y_cursor), line_txt, font=font, fill=(255, 255, 255, 255), anchor="la")
+            y_cursor += line_height
+        layer = _recolor_gradient_layer(layer, grad["stops"], grad["axis"])
+        _paste_layer(draw, layer)
+        return
+
+    y_cursor = y
+    for line in wrapped:
+        line_txt = " ".join(line)
+        line_w = font.getlength(line_txt)
+        left = {"left": 0, "center": line_w / 2, "right": line_w}.get(align or "left", 0)
+        cx = ax - left
+        draw.text((cx, y_cursor), line_txt, font=font, fill=color, anchor="la")
+        y_cursor += line_height
 
 
 def draw_text_box(draw, text, spec, font_bold=FONT_BOLD, font_regular=FONT_REGULAR):
@@ -461,10 +553,12 @@ def draw_text_box(draw, text, spec, font_bold=FONT_BOLD, font_regular=FONT_REGUL
     # every spec (designed or built-in) render on the same PIL baseline, so the
     # designer placement and the exported PNG agree.
     anchor = spec.get("anchor", "la")
+    grad = _build_grad(spec)
 
     if multiline:
         _fitted(draw, text, x, y, width or 500, max_height or 200,
-                font_path, base_size, color, min_size, align=spec.get("align", "left"))
+                font_path, base_size, color, min_size,
+                align=spec.get("align", "left"), grad=grad)
     else:
         align = spec.get("align", "left")
         # Designed fields (anchor "la") are treated as a TOP-LEFT box: the user's
@@ -479,7 +573,7 @@ def draw_text_box(draw, text, spec, font_bold=FONT_BOLD, font_regular=FONT_REGUL
             elif align == "right":
                 x_draw = x + box_w
         _autofit(draw, text, x_draw, y, width or 500, font_path, base_size,
-                 color, min_size, _resolve_anchor(anchor, align))
+                 color, min_size, _resolve_anchor(anchor, align), grad=grad)
     return
 
     # ---- legacy top-left-box path (specs saved without an anchor) ----
