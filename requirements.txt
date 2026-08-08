@@ -1,12 +1,15 @@
-# Instruct pip to use the CPU-only wheel repository for PyTorch
---extra-index-url https://download.pytorch.org/whl/cpu
+# Student ID Card Automation - Python dependencies
+# Install with:  python -m pip install -r requirements.txt
 
-# CPU-only PyTorch (Lightweight, no CUDA bloat)
-torch
-torchvision
-
-# Core Image & Browser Automation Dependencies
+# Image processing / rendering
 numpy>=1.24.0
-opencv-python>=4.8.0
+# Pinned: 5.x is a broken/empty build (no CascadeClassifier / cv2.data)
+opencv-python==4.10.0.84
 Pillow>=10.0.0
+
+# Web UI (template designer + photo/field editor)
+flask>=3.0.0
+werkzeug>=3.0.0
+
+# Browser automation (Google Lens AI Mode scraping)
 playwright>=1.40.0

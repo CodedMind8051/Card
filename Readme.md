@@ -1,470 +1,236 @@
 # Student ID Card Automation
 
-Automatically extracts handwritten student information from scanned admission forms using **Google Lens AI Mode**, then fills a school ID card template with the extracted data and the student's photograph.
+Automatically extracts handwritten student details from scanned admission forms using **Google Lens AI Mode**, then renders a filled school ID card (photo + all fields) into PNGs and optionally an A4 PDF.
+
+The photo box, every text field, and even the text **colour gradient** are fully configurable in a browser-based designer — no code edits needed.
 
 ---
 
 # Features
 
-- Extract handwritten information
-- Works with Hindi and English
-- Converts Hindi text into English
-- Automatically crops student photograph
-- Detects face orientation
-- Rotates photo correctly
-- Enhances photograph quality
-- Pastes photograph into template
-- Auto-fits long names
-- Auto-fits address
-- Handles network interruptions
-- Automatic retry system
-- CAPTCHA handling
-- Progress bar
-- Logging
-- Resume after internet reconnects
+- Extract handwritten information (Hindi & English)
+- Converts Hindi text to English
+- Auto-detects, crops, rotates and enhances the student photograph
+- Browser template **designer** to lay out the photo box and text fields
+- **Multi-colour text** — up to **4 colour stops**, each with a position %, along a **horizontal or vertical** axis (a real gradient inside the letters)
+- Auto-fits long names and addresses
+- Handles network interruptions, automatic retry, CAPTCHA waiting
+- Progress bar, logging
+- **Archive / restore** whole batches (`--mark-old` / `--given-name` / `--current`)
+- Combine finished cards into an **A4 PDF**
 
 ---
 
 # Folder Structure
 
 ```
-project/
+student-id-card/
 │
-├── image/
-│      student1.jpg
-│      student2.jpg
-│      ...
-│
+├── main/
+│   ├── cardfiller.py        # CLI entry point (scrape / fill / edit / design)
+│   ├── card_render.py       # shared rendering (photos, text, gradients)
+│   ├── designer.py          # browser template designer (--new)
+│   └── editor_app.py        # browser photo/field editor (--edit)
+├── image/                   # put scanned admission forms here
 ├── output/
-│
-├── completed/
-│
-├── retry/
-│
-├── temp/
-│
-├── template.png
-├── main.py
+│   ├── cards/               # rendered ID card PNGs
+│   └── records/             # editable *_data.json sidecar files
+├── completed/              # originals moved here after successful processing
+├── retry/                   # failed images, retried automatically
+├── temp/                    # screenshots + run_log.txt
+├── templates/               # designed templates (: template_name + *_design.json)
+├── history/                 # archived batch zips
+├── template.png              # default/fallback template
+├── pdf_maker.py             # combine cards into an A4 PDF
+├── setup.sh                  # one-command installer
 ├── requirements.txt
 └── README.md
 ```
 
 ---
 
-# Requirements
+# Setup (recommended)
 
-## Operating System
-
-Linux is recommended.
-
-Tested on:
-
-- Kali Linux
-- Ubuntu
-- Debian
-
----
-
-## Python
-
-Python 3.11+
-
-Check version
+The included installer does everything: system packages, Python venv, dependencies, Playwright Firefox, and workspace folders.
 
 ```bash
-python --version
+cd student-id-card
+bash setup.sh
+
+# Different distro / already have system libs:
+bash setup.sh --skip-system-deps
 ```
 
----
+`setup.sh` is idempotent — run it again to repair or complete an install.
 
-# Install System Packages
-
-Ubuntu / Debian / Kali
+### Manual (or if you prefer)
 
 ```bash
+# 1. System packages (Debian/Ubuntu/Kali)
 sudo apt update
+sudo apt install python3-venv python3-pip fonts-dejavu-core \
+     libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev
 
-sudo apt install \
-python3-venv \
-python3-pip \
-fonts-dejavu-core \
-libgl1 \
-libglib2.0-0 \
-libsm6 \
-libxext6 \
-libxrender-dev
-```
-
----
-
-# Create Virtual Environment
-
-```bash
-python -m venv venv
-```
-
-Activate
-
-```bash
+# 2. Python virtual environment
+python3 -m venv venv
 source venv/bin/activate
-```
 
----
-
-# Install Python Packages
-
-```bash
+# 3. Python packages
 pip install -r requirements.txt
-```
 
----
-
-# Install Playwright Browser
-
-```bash
+# 4. Playwright browser
 playwright install firefox
+playwright install-deps firefox
 ```
 
-If dependencies are missing
-
-```bash
-playwright install-deps
-```
+> Requirements are deliberately **playwright-free torch/torchvision** — photo enhancement uses only OpenCV, so you avoid the large PyTorch download.
 
 ---
 
-# Firefox Profile
+# Firefox profile / Google login
 
-The script uses a persistent Firefox profile.
-
-Current path:
-
-```
-/home/USERNAME/.mozilla/firefox/PROFILE.default-esr
-```
-
-Find yours
+The scraper drives a **persistent Firefox profile** so it can reuse your logged-in Google session. Find the path, then point the script at it.
 
 ```bash
-ls ~/.mozilla/firefox
+ls ~/.mozilla/firefox      # e.g.  xxxxxxxx.default-esr
 ```
 
-Then edit
+Connect `user_data_dir` inside `main/cardfiller.py`:
 
 ```python
-user_data_dir="YOUR_FIREFOX_PROFILE"
+context = p.firefox.launch_persistent_context(
+    user_data_dir="/home/YOURUSER/.mozilla/firefox/xxxxxxxx.default-esr",
+    ...
+)
 ```
 
-inside
-
-```python
-launch_persistent_context(...)
-```
+Open Firefox once, **log in to Google**, then close it. Now run the tool.
 
 ---
 
-# Google Login
+# Usage
 
-Open Firefox once.
+## 1. Put your forms in `image/`
 
-Login to your Google account.
+Supported: `jpg`, `jpeg`, `png`.
 
-Close Firefox.
-
-Now run the script.
-
----
-
-# Template
-
-Place your ID card template here
-
-```
-template.png
-```
-
----
-
-# Input Images
-
-Put all scanned forms inside
-
-```
-image/
-```
-
-Supported formats
-
-- jpg
-- jpeg
-- png
-
----
-
-# Output
-
-Generated cards
-
-```
-output/
-```
-
-Successfully processed images
-
-```
-completed/
-```
-
-Failed images
-
-```
-retry/
-```
-
-Temporary screenshots
-
-```
-temp/
-```
-
----
-
-# Running
+## 2. Design the card template (optional but recommended)
 
 ```bash
-python main.py
+python main/cardfiller.py --new [image_or_folder] [--port PORT]
+```
+
+A browser opens. You can:
+
+- drag / resize the **photo box** and every **text field**
+- set font size, **bold**, alignment, single colour, or a **4-stop gradient**:
+  - enable up to **4 colour boxes**, each with a colour + a position %
+  - pick **→ (horizontal)** or **↕ (vertical)** for the blend
+  - type dummy student data and press **Preview** to see the final card
+- press **Save template** — this becomes the active template for every later run
+
+### 3. Fill the batch (scrapes + auto-fills every form)
+
+```bash
+python main/cardfiller.py                 # normal run
+python main/cardfiller.py --image-enhance # also upscale/denoise/colour-grade each photo
+```
+
+Processed cards → `output/cards/`, editable sidecars → `output/records/`, originals moved to `completed/`, failures to `retry/` (auto-retried with a fresh browser).
+
+### 4. Touch up a card in the browser
+
+```bash
+python main/cardfiller.py --edit [--port 5000]
+```
+
+Opens a per-card editor: fix the crop/rotation, text, or fields; saving regenerates that card and its sidecar.
+
+### 5. Make an A4 PDF of all cards
+
+```bash
+python pdf_maker.py               # default grid layout
+python pdf_maker.py --enhance-image
 ```
 
 ---
 
-# Processing Flow
+# Batch archive / restore
 
+Keep several batches around and switch between them easily.
+
+```bash
+# Zip the ENTIRE current batch (images, outputs, sidecars, template) into history/batch1.zip
+python main/cardfiller.py --mark-old batch1
+
+# Restore an archived batch so you can continue exactly where you left off:
+python main/cardfiller.py --given-name batch1
+
+# Staying on the current batch (default; the flag cancels a --given-name):
+python main/cardfiller.py --current
 ```
-Open Google Images
 
-↓
+`--mark-old` zips `image/`, `output/`, `completed/`, `retry/`, `temp/`, `templates/` and `template.png`, then cleans them out of the workspace. `--given-name` unzips them back into place.
 
-Click Google Lens
+---
 
-↓
+# Command reference
 
-Upload Image
+| Command | What it does |
+|---|---|
+| `python main/cardfiller.py` | Scrape + fill the batch (uses the active template) |
+| `python main/cardfiller.py --image-enhance` | Same, but enhance every photo |
+| `python main/cardfiller.py --new` | Open the template designer in the browser |
+| `python main/cardfiller.py --edit` | Open the per-card editor |
+| `python main/cardfiller.py --mark-old NAME` | Archive the current batch → `history/` |
+| `python main/cardfiller.py --given-name NAME` | Restore archived batch `NAME` |
+| `python main/cardfiller.py --current` | Stay on the current batch |
+| `python pdf_maker.py [--enhance-image]` | Combine cards into an A4 PDF |
 
-↓
-
-Open AI Mode
-
-↓
-
-Ask Prompt
-
-↓
-
-Receive JSON
-
-↓
-
-Extract Student Data
-
-↓
-
-Crop Student Photo
-
-↓
-
-Enhance Photo
-
-↓
-
-Fill Template
-
-↓
-
-Save Output
-
-↓
-
-Move Original Image
+For every flag:
+```bash
+python main/cardfiller.py --help
 ```
 
 ---
 
-# OCR Prompt
-
-The script asks Google AI to return only JSON.
-
-Fields extracted
-
-- school_name
-- student_name
-- father_name
-- mother_name
-- class
-- section
-- roll_number
-- mobile_number
-- dob
-- address
-- student_photo_bbox
-
----
-
-# Automatic Photo Processing
-
-The script
-
-- detects student face
-- checks orientation
-- rotates if necessary
-- crops correctly
-- enhances image
-- rounds corners
-- pastes into template
-
----
-
-# Network Recovery
-
-If internet disconnects
-
-The script
-
-- pauses
-- waits for internet
-- automatically resumes
-
-No manual action required.
-
----
-
-# CAPTCHA
-
-If Google asks for CAPTCHA
-
-The script waits.
-
-Solve it manually.
-
-Processing resumes automatically.
-
----
-
-# Retry System
-
-If
-
-- JSON is invalid
-- page fails
-- upload fails
-
-the image is copied to
+# How it works (pipeline)
 
 ```
-retry/
+Forms in image/  →  Google Lens AI Mode  →  JSON  →  photo crop/rotation
+                                              ↓
+               render_card (render)  ←  active template (designer)
+                                              ↓
+              output/cards/*.png  +  output/records/*.json
+                                              ↓
+                           pdf_maker.py  →  output.pdf
 ```
 
-After all images finish
-
-the browser restarts
-
-and retries every failed image.
-
----
-
-# Logging
-
-Detailed logs
-
-```
-temp/run_log.txt
-```
-
-Contains
-
-- exceptions
-- extracted JSON
-- stack traces
-
----
-
-# Temporary Screenshots
-
-During processing
-
-```
-03_after_upload_full.png
-
-03b_after_ai_mode.png
-
-04_response_full.png
-```
-
-These are automatically deleted after successful processing.
+The layout (photo box, every field, its font, alignment and **gradient**) is JSON inside the active template / record sidecar, so the on-screen designer, the preview and the final exported PNG are generated by **the same `card_render.py` code path** — no drift.
 
 ---
 
 # Customization
 
-Template
-
-```python
-TEMPLATE_PATH
-```
-
-Photo Location
-
-```python
-PHOTO_BOX
-```
-
-Field Positions
-
-```python
-FIELD_POSITIONS
-```
-
-Fonts
-
-```python
-FONT_BOLD
-
-FONT_REGULAR
-```
-
-Prompt
-
-```python
-PROMPT
-```
+| Constant | File | Meaning |
+|---|---|---|
+| `TEMPLATE_PATH` | `card_render.py` | default `template.png` |
+| `FONT_BOLD` / `FONT_REGULAR` | `card_render.py` | DejaVu fonts |
+| `_FACE_CASCADE` | `card_render.py` | OpenCV face detector |
+| Firefox `user_data_dir` | `cardfiller.py` | persistent profile for scraping |
+| Prompt / selectors | `cardfiller.py` | Google Lens AI query + Playwright selectors |
 
 ---
 
-# Notes
+# FAQ / Notes
 
-Google may occasionally
-
-- ask for CAPTCHA
-- change webpage layout
-- change AI Mode location
-
-If that happens, update the Playwright selectors in the script.
-
----
-
-# Performance
-
-Typical processing time
-
-- 20–30 seconds per image
-
-Depends on
-
-- internet speed
-- Google response time
-- CAPTCHA frequency
+- **Photo blank?** No face detected. Open that card with `--edit` and fix the crop.
+- **Google changed the page?** The selectors live in `cardfiller.py` — update them.
+- **CAPTCHA?** The script pauses; solve it manually and processing resumes.
+- **Card text long?** Fields auto-shrink to fit with no overlap.
 
 ---
 
 # License
 
-Use only on documents that you own or for which you have explicit permission to process.
+Process only documents you own, or for which you have explicit permission.
