@@ -97,7 +97,7 @@ ok "Playwright Firefox installed."
 # 5. Workspace folders
 # --------------------------------------------------------------------------
 note "Creating workspace folders..."
-mkdir -p "$here"/{image,output,retry,temp,templates,history,completed}
+mkdir -p "$here"/{image,student_images,output,retry,temp,templates,history,completed}
 mkdir -p "$here/output/cards" "$here/output/records"
 ok "Folders created."
 

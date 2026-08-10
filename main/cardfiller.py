@@ -18,11 +18,16 @@ from card_render import (
 )
 
 IMAGE_DIR = Path("image")
+STUDENT_IMAGE_DIR = Path("student_images")
 OUTPUT_DIR = Path("output")
 CARD_DIR = OUTPUT_DIR / "cards"       # rendered card PNGs
 RECORD_DIR = OUTPUT_DIR / "records"   # editable *_data.json sidecars
 RETRY_DIR = Path("retry")
+RETRY_FORM_DIR = RETRY_DIR / "form"
+RETRY_STUDENT_DIR = RETRY_DIR / "student"
 COMPLETED_DIR = Path("completed")
+COMPLETED_FORM_DIR = COMPLETED_DIR / "form"
+COMPLETED_STUDENT_DIR = COMPLETED_DIR / "student"
 TEMP_DIR = Path("temp")
 TEMP_SCREENSHOTS = ["03_after_upload_full.png", "03b_after_ai_mode.png", "04_response_full.png"]
 LOG_FILE = TEMP_DIR / "run_log.txt"
@@ -310,6 +315,12 @@ def wait_for_response_stable(page, max_wait=30, check_interval=1.0, stable_check
     return last_text
 
 
+def list_images(directory: Path) -> list:
+    return (sorted(directory.glob("*.[jJ][pP][gG]")) +
+            sorted(directory.glob("*.[jJ][pP][eE][gG]")) +
+            sorted(directory.glob("*.[pP][nN][gG]")))
+
+
 def sidecar_path_for(image_name: str) -> Path:
     return RECORD_DIR / f"{Path(image_name).stem}_data.json"
 
@@ -331,11 +342,16 @@ def save_sidecar(image_name: str, data: dict, layout: dict, source_file: str, ou
     return sidecar
 
 
-def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratios=None, enhance_photo=False):
+def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratios=None, enhance_photo=False,
+                  photo_source_path: Path = None):
     """Render the card for the first time and save an editable sidecar next to it.
 
     Uses the active template (if one was designed with `--new`), otherwise
-    falls back to the original hard-coded template.png layout."""
+    falls back to the original hard-coded template.png layout.
+
+    `photo_source_path`, when given, is the file the student photo is taken
+    from (an external image from student_images/). The crop is then computed
+    by face-detecting the WHOLE image, ignoring any Google Lens bbox ratios."""
     CARD_DIR.mkdir(parents=True, exist_ok=True)
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
     output_path = CARD_DIR / f"{Path(image_name).stem}_filled.png"
@@ -352,7 +368,9 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
         print(f"  Template not found at {template_path}, skipping fill step.")
         return None
 
-    crop_rect = detect_face_crop_rect(source_image_path, ai_ratios=ai_ratios)
+    crop_source = photo_source_path or source_image_path
+    crop_ai_ratios = None if photo_source_path else ai_ratios
+    crop_rect = detect_face_crop_rect(crop_source, ai_ratios=crop_ai_ratios)
     if crop_rect:
         rotation = crop_rect.get("rotation") or 0
         layout["photo"]["crop"] = {k: crop_rect[k] for k in ("x", "y", "w", "h")}
@@ -360,7 +378,7 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
     else:
         layout["photo"]["crop"] = None
 
-    im = render_card(data, layout, template_path=template_path, photo_source_path=str(source_image_path), enhance_photo=enhance_photo)
+    im = render_card(data, layout, template_path=template_path, photo_source_path=str(crop_source), enhance_photo=enhance_photo)
     im.save(output_path)
     print(f"  Filled card saved: {output_path}")
     if crop_rect is None:
@@ -368,12 +386,15 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
 
     # Source file will live under completed/ once the pass finishes moving it;
     # we record that expected final location so the editor can find it later.
-    source_rel = str(Path("completed") / image_name)
+    if photo_source_path:
+        source_rel = str(Path("completed") / "student" / Path(photo_source_path).name)
+    else:
+        source_rel = str(Path("completed") / image_name)
     save_sidecar(image_name, data, layout, source_rel, str(output_path), template_file=template_path)
     return output_path
 
 
-def process_single_image(page, image_path: Path, enhance_photo=False):
+def process_single_image(page, image_path: Path, enhance_photo=False, student_photo_path: Path = None):
     image_path_str = str(image_path.resolve())
     print(f"\n--- Processing: {image_path.name} ---")
 
@@ -492,7 +513,8 @@ def process_single_image(page, image_path: Path, enhance_photo=False):
     print("  ✓ Extracted: " + " | ".join(b for b in summary_bits if b))
 
     ai_ratios = parse_bbox_ratios(data.get("student_photo_bbox"))
-    fill_template(data, image_path.name, image_path, ai_ratios=ai_ratios, enhance_photo=enhance_photo)
+    fill_template(data, image_path.name, image_path, ai_ratios=None if student_photo_path else ai_ratios,
+                  enhance_photo=enhance_photo, photo_source_path=student_photo_path)
     return data
 
 
@@ -521,38 +543,93 @@ def cleanup_temp_screenshots():
             p.unlink()
 
 
-def process_image_pass(page, images, label, pass_start, enhance_photo=False):
-    total = len(images)
+def _move_to_completed(src_path, form_name, is_student_photo=False, external_student_image=False):
+    """Move src_path into completed/. In external-student-image mode the form
+    goes to completed/form/ and its paired photo to completed/student/ (the same
+    form/student split as retry/), keeping the pairing's sequence intact. If a
+    form and its paired photo share a name, the photo gets a '<stem>_photo<ext>'
+    suffix. Patches the record sidecar's source_file so the browser editor still
+    finds the image."""
+    if external_student_image:
+        target_dir = COMPLETED_STUDENT_DIR if is_student_photo else COMPLETED_FORM_DIR
+    else:
+        target_dir = COMPLETED_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    dest = target_dir / src_path.name
+    if dest.exists():
+        p = Path(src_path.name)
+        dest = target_dir / f"{p.stem}_photo{p.suffix}"
+    shutil.move(str(src_path), str(dest))
+    if is_student_photo:
+        sidecar = sidecar_path_for(form_name)
+        if sidecar.exists():
+            try:
+                record = json.loads(sidecar.read_text(encoding="utf-8"))
+                record["source_file"] = str(dest.relative_to(Path.cwd()))
+                sidecar.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+    return dest
+
+
+def _copy_to_retry(form_path, student_photo_path, external_student_image=False):
+    """Move/copy a failed (form, student photo) job into the retry area.
+
+    Normal mode keeps the old flat retry/ folder. External-student-image mode
+    MOVES the form to retry/form/ and its paired student photo to retry/student/
+    so image/ + student_images/ stay paired 1:1 and a re-run won't reprocess
+    already-failed pairs. Returns (retry_form_path, retry_student_path)."""
+    RETRY_DIR.mkdir(exist_ok=True)
+    if external_student_image:
+        RETRY_FORM_DIR.mkdir(parents=True, exist_ok=True)
+        RETRY_STUDENT_DIR.mkdir(parents=True, exist_ok=True)
+        retry_form = RETRY_FORM_DIR / form_path.name
+        retry_student = RETRY_STUDENT_DIR / student_photo_path.name if student_photo_path else None
+        if form_path.exists() and form_path != retry_form:
+            shutil.move(str(form_path), str(retry_form))
+        if student_photo_path and student_photo_path.exists() and student_photo_path != retry_student:
+            shutil.move(str(student_photo_path), str(retry_student))
+        return retry_form, retry_student
+    retry_path = RETRY_DIR / form_path.name
+    if form_path.exists():
+        shutil.copy2(str(form_path), str(retry_path))
+    return retry_path, None
+
+
+def process_image_pass(page, jobs, label, pass_start, enhance_photo=False, external_student_image=False):
+    """Process a list of jobs. Each job is a tuple (form_path, student_photo_path)
+    where student_photo_path is None in normal mode."""
+    total = len(jobs)
     done = 0
     failed = 0
-    retry_images = []
-    queue = deque(images)
+    retry_jobs = []
+    queue = deque(jobs)
 
     consecutive_bad_json = 0
     bad_json_batch = []
 
     def flush_bad_json_batch_as_failures():
         nonlocal failed, done
-        for p in bad_json_batch:
+        for form_path, student_path in bad_json_batch:
             failed += 1
             done += 1
-            log_detail(f"[{p.name}] Bad-JSON streak broke without hitting {BAD_JSON_STREAK_LIMIT} in a row; treating as failed.")
-            print(f"\n  ✗ Failed: {p.name} — bad/non-JSON response")
-            retry_path = RETRY_DIR / p.name
-            if p.exists():
-                shutil.copy2(str(p), str(retry_path))
-                retry_images.append(retry_path)
+            log_detail(f"[{form_path.name}] Bad-JSON streak broke without hitting {BAD_JSON_STREAK_LIMIT} in a row; treating as failed.")
+            print(f"\n  ✗ Failed: {form_path.name} — bad/non-JSON response")
+            retry_jobs.append(_copy_to_retry(form_path, student_path, external_student_image))
         bad_json_batch.clear()
 
     while queue:
-        img_path = queue.popleft()
+        form_path, student_path = queue.popleft()
         img_start = time.time()
         finished = False
         while not finished:
             try:
-                process_single_image(page, img_path, enhance_photo=enhance_photo)
+                process_single_image(page, form_path, enhance_photo=enhance_photo, student_photo_path=student_path)
                 cleanup_temp_screenshots()
-                shutil.move(str(img_path), str(COMPLETED_DIR / img_path.name))
+                _move_to_completed(form_path, form_path.name, external_student_image=external_student_image)
+                if student_path:
+                    _move_to_completed(student_path, form_path.name, is_student_photo=True,
+                                       external_student_image=external_student_image)
                 done += 1
                 print(f"  ⏱ Done in {time.time() - img_start:.1f}s")
                 finished = True
@@ -562,9 +639,9 @@ def process_image_pass(page, images, label, pass_start, enhance_photo=False):
 
             except BadJSONResponseError as e:
                 consecutive_bad_json += 1
-                bad_json_batch.append(img_path)
+                bad_json_batch.append((form_path, student_path))
                 cleanup_temp_screenshots()
-                print(f"\n  ⚠ Non-JSON response for {img_path.name} "
+                print(f"\n  ⚠ Non-JSON response for {form_path.name} "
                       f"({consecutive_bad_json}/{BAD_JSON_STREAK_LIMIT} in a row): {short_error(e)}")
 
                 if consecutive_bad_json >= BAD_JSON_STREAK_LIMIT:
@@ -572,8 +649,8 @@ def process_image_pass(page, images, label, pass_start, enhance_photo=False):
                           f"waiting {fmt_time(JSON_RETRY_WAIT)} before trying them again...")
                     time.sleep(JSON_RETRY_WAIT)
                     consecutive_bad_json = 0
-                    for p in reversed(bad_json_batch):
-                        queue.appendleft(p)
+                    for job in reversed(bad_json_batch):
+                        queue.appendleft(job)
                     bad_json_batch.clear()
                     print("  Resuming...")
 
@@ -581,11 +658,11 @@ def process_image_pass(page, images, label, pass_start, enhance_photo=False):
 
             except Exception as e:
                 if is_network_error(e) or not check_internet():
-                    print(f"\n  ⚠ Network issue while processing {img_path.name}: {short_error(e)}")
-                    log_detail(f"[{img_path.name}] NETWORK ERROR:\n{traceback.format_exc()}")
+                    print(f"\n  ⚠ Network issue while processing {form_path.name}: {short_error(e)}")
+                    log_detail(f"[{form_path.name}] NETWORK ERROR:\n{traceback.format_exc()}")
                     cleanup_temp_screenshots()
                     wait_for_internet()
-                    print(f"  Resuming {img_path.name}...")
+                    print(f"  Resuming {form_path.name}...")
                     continue
 
                 if bad_json_batch:
@@ -593,13 +670,11 @@ def process_image_pass(page, images, label, pass_start, enhance_photo=False):
                     flush_bad_json_batch_as_failures()
 
                 failed += 1
-                log_detail(f"[{img_path.name}] ERROR:\n{traceback.format_exc()}")
-                print(f"\n  ✗ Failed: {img_path.name} — {short_error(e)}")
+                log_detail(f"[{form_path.name}] ERROR:\n{traceback.format_exc()}")
+                print(f"\n  ✗ Failed: {form_path.name} — {short_error(e)}")
                 print(f"    (full details in {LOG_FILE})")
                 cleanup_temp_screenshots()
-                retry_path = RETRY_DIR / img_path.name
-                shutil.copy2(str(img_path), str(retry_path))
-                retry_images.append(retry_path)
+                retry_jobs.append(_copy_to_retry(form_path, student_path, external_student_image))
                 done += 1
                 finished = True
 
@@ -612,10 +687,10 @@ def process_image_pass(page, images, label, pass_start, enhance_photo=False):
         flush_bad_json_batch_as_failures()
 
     print()
-    return done, failed, retry_images
+    return done, failed, retry_jobs
 
 
-def scrape_main(enhance_photo=False):
+def scrape_main(enhance_photo=False, external_student_image=False):
     OUTPUT_DIR.mkdir(exist_ok=True)
     CARD_DIR.mkdir(exist_ok=True)
     RECORD_DIR.mkdir(exist_ok=True)
@@ -623,10 +698,34 @@ def scrape_main(enhance_photo=False):
     COMPLETED_DIR.mkdir(exist_ok=True)
     TEMP_DIR.mkdir(exist_ok=True)
 
-    all_images = sorted(IMAGE_DIR.glob("*.[jJ][pP][gG]")) + sorted(IMAGE_DIR.glob("*.[jJ][pP][eE][gG]")) + sorted(IMAGE_DIR.glob("*.[pP][nN][gG]"))
+    all_images = list_images(IMAGE_DIR)
     if not all_images:
         print(f"No images found in {IMAGE_DIR}")
         return
+
+    if external_student_image:
+        student_images = list_images(STUDENT_IMAGE_DIR)
+        if not student_images:
+            print(f"No student images found in {STUDENT_IMAGE_DIR}")
+            return
+        if len(student_images) < len(all_images):
+            print(f"  ⚠ Found {len(all_images)} forms but only {len(student_images)} student images "
+                  f"in {STUDENT_IMAGE_DIR}. The sequences must match 1:1 in order.")
+            print("  Processing only the first", len(student_images), "forms to keep the pairing intact.")
+            all_images = all_images[:len(student_images)]
+        elif len(student_images) > len(all_images):
+            print(f"  ⚠ {len(student_images)} student images but only {len(all_images)} forms. "
+                  f"Extra student images will be ignored.")
+
+        jobs = list(zip(all_images, student_images))
+        print(f"\nUsing external student photos (paired in file order with the forms):")
+        for i, (form, photo) in enumerate(jobs):
+            print(f"  {i+1:>3}. {form.name}  ↔  {photo.name}")
+    else:
+        jobs = [(img, None) for img in all_images]
+
+    total = len(jobs)
+    print(f"\nFound {total} image(s) to process. Estimating time after the first one...\n")
 
     with sync_playwright() as p:
         context = p.firefox.launch_persistent_context(
@@ -639,14 +738,14 @@ def scrape_main(enhance_photo=False):
 
         page = context.pages[0] if context.pages else context.new_page()
 
-        total = len(all_images)
-        print(f"Found {total} image(s) to process. Estimating time after the first one...\n")
         pass_start = time.time()
 
-        done, failed, retry_images = process_image_pass(page, all_images, "Processing", pass_start, enhance_photo=enhance_photo)
+        done, failed, retry_jobs = process_image_pass(page, jobs, "Processing", pass_start,
+                                                      enhance_photo=enhance_photo,
+                                                      external_student_image=external_student_image)
 
-        if retry_images:
-            print(f"\n=== Restarting browser for retry of {len(retry_images)} image(s) ===")
+        if retry_jobs:
+            print(f"\n=== Restarting browser for retry of {len(retry_jobs)} image(s) ===")
             context.close()
             context = p.firefox.launch_persistent_context(
                 user_data_dir="/home/coded_mind__/.mozilla/firefox/e0uaw6ea.default-esr",
@@ -658,13 +757,18 @@ def scrape_main(enhance_photo=False):
             page = context.pages[0] if context.pages else context.new_page()
 
             retry_pass_start = time.time()
-            retry_done, retry_failed, still_failed = process_image_pass(page, retry_images, "Retry", retry_pass_start, enhance_photo=enhance_photo)
+            retry_done, retry_failed, still_failed = process_image_pass(page, retry_jobs, "Retry", retry_pass_start,
+                                                                        enhance_photo=enhance_photo,
+                                                                        external_student_image=external_student_image)
 
             if still_failed:
                 print(f"\n=== {len(still_failed)} image(s) still failed after retry ===")
-                for f in still_failed:
-                    print(f"  {f.name}")
-                print("These remain in the retry folder.")
+                for form_path, _ in still_failed:
+                    print(f"  {form_path.name}")
+                if external_student_image:
+                    print("Forms remain in retry/form/ and their student photos in retry/student/.")
+                else:
+                    print("These remain in the retry folder.")
             else:
                 print("\n=== All retries succeeded! ===")
         else:
@@ -678,9 +782,10 @@ def archive_current_template(name: str) -> bool:
     """Mark the current batch as 'old' by snapshotting EVERYTHING needed to
     work on / edit it later into history/<name>.zip:
       image/  - unprocessed input photos
+      student_images/ - external student photos (used with --external-student-image)
       output/ - rendered cards (output/cards) + editable records (output/records)
       completed/ - processed photos (the originals moved after a successful pass)
-      retry/  - photos that failed and are queued for a retry
+      retry/  - photos that failed and are queued for a retry (form/ + student/ subfolders)
       temp/   - run logs / screenshots
       templates/ + template.png - the template design + base fallback image
     The zip keeps the project's top-level layout, so `--given-name` can put it
@@ -691,7 +796,7 @@ def archive_current_template(name: str) -> bool:
         print(f"  {target} already exists. Pick a different name or delete it first.")
         return False
 
-    paths = ["image", "output", "completed", "retry", "temp", "templates", "template.png"]
+    paths = ["image", "student_images", "output", "completed", "retry", "temp", "templates", "template.png"]
     count = 0
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
         for rel in paths:
@@ -776,6 +881,12 @@ def main():
     parser.add_argument("--image-enhance", action="store_true", default=False,
                         help="Enhance the student photo (upscale, denoise, contrast/colour/sharpening) when rendering. "
                              "Off by default — the original photo is used as-is.")
+    parser.add_argument("--external-student-image", action="store_true", default=False,
+                        help="Use a student photo from the student_images/ folder instead of the one cropped out of "
+                             "the scanned form. Forms (image/) and photos (student_images/) are paired 1:1 by file "
+                             "order, so the i-th form gets the i-th photo. The photo is face-detected & cropped "
+                             "automatically (Google Lens bbox is NOT used). Failed pairs go to retry/form/ and "
+                             "retry/student/.")
     parser.add_argument("--mark-old", metavar="NAME",
                         help="Archive the ENTIRE current batch (image/, output/, completed/, retry/, temp/, templates/, template.png) "
                              "as a zip in history/ under NAME, then stop.")
@@ -816,7 +927,7 @@ def main():
             sys.argv += ["--port", str(args.port)]
         design_main()
     else:
-        scrape_main(enhance_photo=args.image_enhance)
+        scrape_main(enhance_photo=args.image_enhance, external_student_image=args.external_student_image)
 
 
 if __name__ == "__main__":

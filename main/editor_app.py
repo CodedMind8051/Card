@@ -100,13 +100,16 @@ def save_record(name: str, record: dict):
 
 def resolve_source_image(record: dict) -> Path | None:
     """Find the original uploaded image, whether it's still in image/, has
-    moved to completed/, or was recorded with an explicit relative path."""
+    moved to completed/ (or completed/form/ + completed/student/ with
+    --external-student-image), or was recorded with an explicit relative path."""
     candidates = []
     src = record.get("source_file")
     if src:
         candidates.append(BASE_DIR / src)
     name = record["image_name"]
     candidates.append(COMPLETED_DIR / name)
+    candidates.append(COMPLETED_DIR / "form" / name)
+    candidates.append(COMPLETED_DIR / "student" / name)
     candidates.append(IMAGE_DIR / name)
     for c in candidates:
         if c.exists():

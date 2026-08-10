@@ -32,11 +32,12 @@ student-id-card/
 │   ├── designer.py          # browser template designer (--new)
 │   └── editor_app.py        # browser photo/field editor (--edit)
 ├── image/                   # put scanned admission forms here
+├── student_images/          # (optional) separate student photos for --external-student-image
 ├── output/
 │   ├── cards/               # rendered ID card PNGs
 │   └── records/             # editable *_data.json sidecar files
-├── completed/              # originals moved here after successful processing
-├── retry/                   # failed images, retried automatically
+├── completed/              # originals moved here after successful processing (form/ + student/ with --external-student-image)
+├── retry/                   # failed images, retried automatically (form/ + student/ with --external-student-image)
 ├── temp/                    # screenshots + run_log.txt
 ├── templates/               # designed templates (: template_name + *_design.json)
 ├── history/                 # archived batch zips
@@ -134,9 +135,12 @@ A browser opens. You can:
 ```bash
 python main/cardfiller.py                 # normal run
 python main/cardfiller.py --image-enhance # also upscale/denoise/colour-grade each photo
+python main/cardfiller.py --external-student-image
 ```
 
 Processed cards → `output/cards/`, editable sidecars → `output/records/`, originals moved to `completed/`, failures to `retry/` (auto-retried with a fresh browser).
+
+> **`--external-student-image`** — use a separate photo for each student instead of the photo pasted on the form. Put the scanned forms in `image/` and the matching student photos in `student_images/`; they are paired **1:1 by file order** (form #1 ↔ photo #1, form #2 ↔ photo #2, …), so no photo can land on the wrong card. Each photo is face-detected and cropped automatically — the Google Lens bbox is **not** used. The pairing is kept everywhere: successful pairs go to `completed/form/` + `completed/student/`, and failed pairs to `retry/form/` + `retry/student/` — forms and photos always stay in separate folders, in the same order.
 
 ### 4. Touch up a card in the browser
 
@@ -170,7 +174,7 @@ python main/cardfiller.py --given-name batch1
 python main/cardfiller.py --current
 ```
 
-`--mark-old` zips `image/`, `output/`, `completed/`, `retry/`, `temp/`, `templates/` and `template.png`, then cleans them out of the workspace. `--given-name` unzips them back into place.
+`--mark-old` zips `image/`, `student_images/`, `output/`, `completed/`, `retry/`, `temp/`, `templates/` and `template.png`, then cleans them out of the workspace. `--given-name` unzips them back into place.
 
 ---
 
@@ -180,6 +184,7 @@ python main/cardfiller.py --current
 |---|---|
 | `python main/cardfiller.py` | Scrape + fill the batch (uses the active template) |
 | `python main/cardfiller.py --image-enhance` | Same, but enhance every photo |
+| `python main/cardfiller.py --external-student-image` | Use student photos from `student_images/` (paired by file order with `image/`), face-cropped without Google Lens coords |
 | `python main/cardfiller.py --new` | Open the template designer in the browser |
 | `python main/cardfiller.py --edit` | Open the per-card editor |
 | `python main/cardfiller.py --mark-old NAME` | Archive the current batch → `history/` |
