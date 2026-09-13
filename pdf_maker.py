@@ -13,9 +13,8 @@ enhance = args.enhance_image
 # ------------------------
 # CONFIGURATION
 # ------------------------
-
 INPUT_FOLDER = "output/cards"
-OUTPUT_PDF = "output.pdf"
+OUTPUT_PDF = "pdf/output.pdf"
 
 # A4 Landscape at 300 DPI
 PAGE_W = 3508

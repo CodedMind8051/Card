@@ -2,15 +2,16 @@ import re
 import sys
 import json
 import time
+import os
 import random
 import shutil
 import socket
 import zipfile
 import argparse
 import traceback
+import mimetypes
 from pathlib import Path
 from collections import deque
-from playwright.sync_api import sync_playwright
 
 from card_render import (
     TEMPLATE_PATH, PHOTO_BOX, TEMPLATES_DIR,
@@ -45,6 +46,47 @@ NETWORK_ERROR_PATTERNS = [
     "ERR_NAME_NOT_RESOLVED", "ERR_TIMED_OUT", "ERR_ADDRESS_UNREACHABLE",
     "net::ERR", "NS_ERROR_", "getaddrinfo", "Timeout", "ECONNRESET",
 ]
+
+# ---- Gemini settings (free tier) - FIXED Sep 2026 ----
+# ACTUAL free tier (Sep 2026): gemini-flash-latest maps to 3.8-flash, limit 20 RPD
+# per project per model — NOT 15 RPM. The 15 RPM / 1000 RPD comment was outdated.
+# gemini-2.5-flash-lite / 2.0-flash now 404 with google-genai 0.3.0; keep as fallback only.
+GEMINI_MODEL = "gemini-flash-latest"
+GEMINI_FALLBACK_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+GEMINI_RPM = 5  # throttle to avoid 429 even though daily cap is the real limit
+_GEMINI_MIN_INTERVAL = 60.0 / GEMINI_RPM + 1.0
+_last_gemini_call = 0.0
+_gemini_client = None
+
+# ---- Groq fallback (free tier) - 30 RPM / 14.4K OTPM free ----
+# Vision model with JSON mode: qwen/qwen3.6-27b supports image+JSON
+# NOTE: free tier OTPM = 1000 (on_demand). Must keep max_tokens low and images small.
+GROQ_MODEL = "qwen/qwen3.6-27b"
+GROQ_RPM = 10  # safer than 30; OTPM is the real bottleneck
+_GROQ_MIN_INTERVAL = 60.0 / GROQ_RPM + 0.5
+_last_groq_call = 0.0
+_groq_client = None
+
+DAILY_QUOTA_PATTERNS = ["GenerateRequestsPerDay", "PerDayPerProject", "quotaValue.*20", "limit: 20"]
+
+# ---- Stop signal for UI ----
+_stop_requested = False
+def request_stop():
+    global _stop_requested
+    _stop_requested = True
+def clear_stop():
+    global _stop_requested
+    _stop_requested = False
+def should_stop() -> bool:
+    # also check temp file signal for cross-process stop
+    if _stop_requested:
+        return True
+    try:
+        if (TEMP_DIR / "stop_requested").exists():
+            return True
+    except Exception:
+        pass
+    return False
 
 
 class BadJSONResponseError(RuntimeError):
@@ -93,19 +135,6 @@ def wait_for_internet():
     print(f"\n  ✓ Internet reconnected after {fmt_time(waited)}. Resuming...")
 
 
-def goto_with_retry(page, url, **kwargs):
-    while True:
-        try:
-            page.goto(url, **kwargs)
-            return
-        except Exception as e:
-            if is_network_error(e) or not check_internet():
-                print(f"\n  ⚠ Couldn't reach {url}: {short_error(e)}")
-                wait_for_internet()
-                continue
-            raise
-
-
 PROMPT = (
     "Extract all information from this image and return ONLY a valid JSON object "
     "with these keys: school_name, student_name, father_name, mother_name, class, "
@@ -117,33 +146,293 @@ PROMPT = (
 )
 
 
-def human_move(page, x, y, steps=25):
-    box = page.viewport_size
-    sx = random.randint(100, box["width"] - 100)
-    sy = random.randint(100, box["height"] - 100)
-    for i in range(steps):
-        t = i / steps
-        cx = sx + (x - sx) * t + random.uniform(-15, 15)
-        cy = sy + (y - sy) * t + random.uniform(-15, 15)
-        page.mouse.move(cx, cy)
-        time.sleep(random.uniform(0.005, 0.02))
-    page.mouse.move(x, y)
+def get_gemini_client():
+    global _gemini_client
+    if _gemini_client is not None:
+        return _gemini_client
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_GENAI_API_KEY")
+    if not api_key:
+        # also try reading from temp/gemini_key.txt for convenience
+        key_file = Path("temp/gemini_key.txt")
+        if key_file.exists():
+            api_key = key_file.read_text(encoding="utf-8").strip()
+    if not api_key:
+        # try config_store (premium UI)
+        try:
+            import config_store as _cs
+            api_key = _cs.get_active_key_value("gemini")
+        except ModuleNotFoundError:
+            try:
+                from main import config_store as _cs
+                api_key = _cs.get_active_key_value("gemini")
+            except Exception:
+                pass
+        except Exception:
+            pass
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY not set.\n"
+            "  1. Open Premium UI at http://127.0.0.1:5000 -> API Keys -> Add Gemini key\n"
+            "  2. Or get free key at https://aistudio.google.com/app/apikey\n"
+            "  3. Set it: export GEMINI_API_KEY='your_key' or create temp/gemini_key.txt"
+        )
+    try:
+        from google import genai
+        _gemini_client = genai.Client(api_key=api_key)
+    except ImportError:
+        raise RuntimeError(
+            "google-genai not installed. Run: pip install google-genai\n"
+            "  (or pip install -r requirements.txt)"
+        )
+    return _gemini_client
 
 
-def human_click(page, locator):
-    box = locator.bounding_box()
-    if not box:
-        locator.click()
-        return
-    x = box["x"] + box["width"] / 2 + random.uniform(-5, 5)
-    y = box["y"] + box["height"] / 2 + random.uniform(-5, 5)
-    human_move(page, x, y)
-    time.sleep(random.uniform(0.2, 0.6))
-    page.mouse.click(x, y)
+def throttle_gemini():
+    global _last_gemini_call
+    now = time.time()
+    elapsed = now - _last_gemini_call
+    if elapsed < _GEMINI_MIN_INTERVAL:
+        wait = _GEMINI_MIN_INTERVAL - elapsed
+        print(f"  ⏳ Gemini rate limit ({GEMINI_RPM} RPM) - waiting {wait:.1f}s...")
+        time.sleep(wait)
+    _last_gemini_call = time.time()
 
 
-def human_wait(a=1.0, b=2.5):
-    time.sleep(random.uniform(a, b))
+def is_daily_quota_error(msg: str) -> bool:
+    return any(p.lower() in msg.lower() for p in DAILY_QUOTA_PATTERNS) or ("perday" in msg.lower() and "20" in msg)
+
+def downscale_image_for_api(image_path: Path, max_dim: int = 1024, quality: int = 80) -> tuple[bytes, str]:
+    """Resize image so longest side <= max_dim and return (jpeg_bytes, mime). Saves API quota/tokens and avoids Groq 429 OTPM."""
+    from PIL import Image
+    import io
+    try:
+        im = Image.open(image_path)
+        if im.mode in ("RGBA", "LA"):
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        elif im.mode != "RGB":
+            im = im.convert("RGB")
+        w, h = im.size
+        scale = min(1.0, max_dim / max(w, h))
+        if scale < 1.0:
+            new_w, new_h = int(w * scale), int(h * scale)
+            im = im.resize((new_w, new_h), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue(), "image/jpeg"
+    except Exception:
+        # fallback to original bytes
+        mime, _ = mimetypes.guess_type(str(image_path))
+        if mime is None:
+            mime = "image/jpeg"
+        return image_path.read_bytes(), mime
+
+
+def get_groq_client():
+    global _groq_client
+    if _groq_client is not None:
+        return _groq_client
+    api_key = os.environ.get("GROQ_API_KEY") or os.environ.get("GROQ_KEY")
+    if not api_key:
+        key_file = Path("temp/groq_key.txt")
+        if key_file.exists():
+            api_key = key_file.read_text(encoding="utf-8").strip()
+    if not api_key:
+        try:
+            import config_store as _cs
+            api_key = _cs.get_active_key_value("groq")
+        except ModuleNotFoundError:
+            try:
+                from main import config_store as _cs
+                api_key = _cs.get_active_key_value("groq")
+            except Exception:
+                pass
+        except Exception:
+            pass
+    if not api_key:
+        return None
+    try:
+        from groq import Groq
+        _groq_client = Groq(api_key=api_key)
+    except ImportError:
+        print("  ⚠ groq not installed (pip install groq) - skipping Groq fallback")
+        return None
+    return _groq_client
+
+
+def throttle_groq():
+    global _last_groq_call
+    now = time.time()
+    elapsed = now - _last_groq_call
+    if elapsed < _GROQ_MIN_INTERVAL:
+        wait = _GROQ_MIN_INTERVAL - elapsed
+        print(f"  ⏳ Groq rate limit ({GROQ_RPM} RPM) - waiting {wait:.1f}s...")
+        time.sleep(wait)
+    _last_groq_call = time.time()
+
+
+def call_groq_image(image_path: Path) -> str:
+    """Fallback: send image + PROMPT to Groq vision model. Downscales image + uses low max_tokens to stay under 1000 OTPM free limit."""
+    import base64
+    client = get_groq_client()
+    if client is None:
+        raise RuntimeError("GROQ_API_KEY not set. Get free key at https://console.groq.com/keys")
+    throttle_groq()
+    img_bytes, mime = downscale_image_for_api(image_path, max_dim=1024, quality=80)
+    b64 = base64.b64encode(img_bytes).decode("utf-8")
+    if not check_internet():
+        wait_for_internet()
+    response = client.chat.completions.create(
+        model=GROQ_MODEL,
+        response_format={"type": "json_object"},
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+            ]
+        }],
+        temperature=0.1,
+        max_tokens=600,  # must stay <1000 OTPM free tier; 2000 triggers 429 (see run_log 2026-09-13)
+    )
+    text = (response.choices[0].message.content or "").strip()
+    if not text:
+        raise BadJSONResponseError("Empty response from Groq")
+    return text
+
+
+def call_gemini_image(image_path: Path) -> str:
+    """Send image + PROMPT to Gemini and return raw text. Handles 404 fallback + 429/503 retry + throttle."""
+    from google.genai import types
+
+    throttle_gemini()
+
+    # Downscale to ~1280px to cut quota cost and latency (originals are 4000x3000 ~3MB)
+    image_bytes, mime = downscale_image_for_api(image_path, max_dim=1280, quality=85)
+    client = get_gemini_client()
+
+    models_to_try = [GEMINI_MODEL] + [m for m in GEMINI_FALLBACK_MODELS if m != GEMINI_MODEL]
+    max_retries = 3  # reduced - fallback to Groq instead of long wait
+
+    for attempt in range(max_retries):
+        # try each model until one succeeds
+        last_error = None
+        for model_name in models_to_try:
+            try:
+                if not check_internet():
+                    wait_for_internet()
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        types.Part.from_bytes(data=image_bytes, mime_type=mime),
+                        PROMPT,
+                    ],
+                )
+                text = (response.text or "").strip()
+                if not text:
+                    raise BadJSONResponseError("Empty response from Gemini")
+                # remember working model for next calls
+                if model_name != GEMINI_MODEL:
+                    globals()["GEMINI_MODEL"] = model_name
+                    print(f"  ✓ Using model {model_name}")
+                return text
+            except BadJSONResponseError:
+                raise
+            except Exception as e:
+                msg = str(e)
+                is_404 = "404" in msg or "NOT_FOUND" in msg
+                is_429 = "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower()
+                is_503 = "503" in msg or "UNAVAILABLE" in msg or "overloaded" in msg.lower() or "high demand" in msg.lower()
+                if is_daily_quota_error(msg):
+                    # Daily 20 RPD exhausted — retrying is pointless for ~24h. Fail fast to Groq or abort.
+                    print(f"\n  ✗ Daily quota hit (20/day) on {model_name}: {short_error(e)}")
+                    print(f"    → Quota resets ~midnight Pacific. Use a different project/key or wait.")
+                    log_detail(f"[{image_path.name}] DAILY QUOTA hit on {model_name}: {msg[:800]}")
+                    last_error = e
+                    break
+                if is_404:
+                    last_error = e
+                    print(f"  ⚠ Model {model_name} not found (404), trying next...")
+                    continue
+                if is_429 or is_503:
+                    status = "429 quota" if is_429 else "503 overloaded"
+                    wait = min(8 * (2 ** attempt) + random.uniform(0, 2), 30)
+                    print(f"\n  ⚠ Gemini {status} on {model_name} - waiting {wait:.0f}s (attempt {attempt+1}/{max_retries})...")
+                    log_detail(f"[{image_path.name}] {status} retry {attempt+1}: {msg[:500]}")
+                    time.sleep(wait)
+                    throttle_gemini()
+                    last_error = e
+                    break  # break model loop -> retry outer or fallback to Groq
+                if is_network_error(e) or not check_internet():
+                    print(f"\n  ⚠ Network issue: {short_error(e)}")
+                    wait_for_internet()
+                    last_error = e
+                    break
+                # other error - try next model if 404-ish else retry outer
+                last_error = e
+                print(f"  ⚠ Gemini error on {model_name}: {short_error(e)} - trying next model...")
+                continue
+
+        # if we got here without returning, we either had 429/503/network (break) or all models failed
+        if last_error is None:
+            continue
+        msg = str(last_error)
+        is_429 = "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower()
+        is_503 = "503" in msg or "UNAVAILABLE" in msg
+        is_network = is_network_error(last_error) or not check_internet()
+        if is_429 or is_503 or is_network:
+            if attempt < max_retries - 1:
+                continue
+            else:
+                raise last_error  # will trigger Groq fallback in caller
+        # non-retryable but we tried all models - retry outer a few times
+        if attempt < max_retries - 1:
+            wait = 3 * (attempt + 1)
+            print(f"  ⚠ Retrying in {wait}s ({attempt+1}/{max_retries})...")
+            time.sleep(wait)
+            continue
+        raise last_error
+    raise RuntimeError(f"Failed after {max_retries} retries: {last_error}")
+
+
+def call_image_with_fallback(image_path: Path) -> str:
+    """Try Gemini first, fallback to Groq on 429/503/404 to avoid long waits. Groq will fail fast if daily quota is hit."""
+    try:
+        return call_gemini_image(image_path)
+    except Exception as gem_e:
+        msg = str(gem_e)
+        if is_daily_quota_error(msg):
+            # Don't even try Groq if we know Gemini daily quota is gone — but try Groq anyway as fallback,
+            # because Groq has its own separate quota.
+            groq_client = get_groq_client()
+            if groq_client is not None:
+                print(f"  → Gemini daily quota exhausted, trying Groq {GROQ_MODEL}...")
+                log_detail(f"[{image_path.name}] Gemini daily quota -> Groq fallback: {msg[:400]}")
+                try:
+                    text = call_groq_image(image_path)
+                    print(f"  ✓ Groq succeeded (bypassing Gemini daily limit)")
+                    return text
+                except Exception as groq_e:
+                    print(f"  ✗ Groq also failed: {short_error(groq_e)}")
+                    raise RuntimeError(f"Gemini daily quota hit: {gem_e} | Groq failed: {groq_e}") from gem_e
+            raise RuntimeError(f"Gemini daily quota hit (20/day) — add new API key or wait until midnight Pacific. Detail: {gem_e}") from gem_e
+        is_fallback_error = any(x in msg for x in ["429", "503", "404", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "quota", "NOT_FOUND", "overloaded"])
+        groq_client = get_groq_client()
+        if is_fallback_error and groq_client is not None:
+            print(f"  → Gemini failed ({short_error(gem_e)}), trying Groq {GROQ_MODEL}...")
+            log_detail(f"[{image_path.name}] Gemini failed, Groq fallback: {msg[:400]}")
+            try:
+                text = call_groq_image(image_path)
+                print(f"  ✓ Groq succeeded")
+                return text
+            except Exception as groq_e:
+                # Groq OTPM 429 with max_tokens fix should be rare now; surface clearly
+                if "OTPM" in str(groq_e) or "output tokens" in str(groq_e).lower():
+                    log_detail(f"[{image_path.name}] Groq OTPM hit: {groq_e}")
+                print(f"  ✗ Groq also failed: {short_error(groq_e)}")
+                raise RuntimeError(f"Gemini failed: {gem_e} | Groq failed: {groq_e}") from gem_e
+        raise
 
 
 def extract_json(text):
@@ -175,146 +464,6 @@ def parse_bbox_ratios(bbox_data):
     return None
 
 
-def find_ask_box_all_frames(page):
-    ask_selectors = [
-        'textarea[placeholder*="Ask"]',
-        'input[placeholder*="Ask"]',
-        'textarea[aria-label*="Ask"]',
-        'div[contenteditable="true"][aria-label*="Ask"]',
-        'div[contenteditable="true"]',
-    ]
-    frames_to_check = [page.main_frame] + page.frames
-    for frame in frames_to_check:
-        for sel in ask_selectors:
-            try:
-                loc = frame.locator(sel)
-                if loc.count() > 0 and loc.first.is_visible():
-                    return loc.first, frame
-            except Exception:
-                pass
-    return None, None
-
-
-def wait_for_captcha_challenge_resolution(page, initial_wait=2.5):
-    time.sleep(initial_wait)
-    challenge_selectors = [
-        'iframe[title*="recaptcha challenge"]',
-        'iframe[title*="challenge"]',
-        'iframe[src*="bframe"]',
-    ]
-
-    challenge_sel = None
-    for sel in challenge_selectors:
-        try:
-            iframe_el = page.locator(sel)
-            if iframe_el.count() > 0 and iframe_el.first.is_visible():
-                challenge_sel = sel
-                break
-        except Exception:
-            continue
-
-    if not challenge_sel:
-        return
-
-    print("\n  ⚠ A CAPTCHA challenge (image puzzle) appeared.")
-    print("  Please solve it manually in the browser window - the script will wait for you.")
-
-    waited = 0
-    while True:
-        time.sleep(2)
-        waited += 2
-        try:
-            iframe_el = page.locator(challenge_sel)
-            still_visible = iframe_el.count() > 0 and iframe_el.first.is_visible()
-        except Exception:
-            still_visible = False
-        if not still_visible:
-            print(f"  ✓ CAPTCHA challenge resolved after {fmt_time(waited)}. Continuing...")
-            return
-        if waited % 10 == 0:
-            print(f"\r  Still waiting for you to solve the CAPTCHA... ({fmt_time(waited)})", end="", flush=True)
-
-
-def handle_captcha(page):
-    recaptcha_selectors = [
-        'iframe[title*="reCAPTCHA"]',
-        'iframe[src*="recaptcha"]',
-        'iframe[src*="google.com/recaptcha"]',
-    ]
-
-    for sel in recaptcha_selectors:
-        try:
-            frame_loc = page.frame_locator(sel)
-
-            checkbox = frame_loc.locator('.recaptcha-checkbox-border')
-            if checkbox.count() == 0:
-                checkbox = frame_loc.locator('[role="checkbox"]')
-            if checkbox.count() == 0:
-                checkbox = frame_loc.locator('.rc-anchor-content')
-
-            if checkbox.count() > 0 and checkbox.first.is_visible():
-                print("  CAPTCHA detected, clicking...")
-                checkbox.first.scroll_into_view_if_needed()
-                human_wait(0.8, 1.8)
-                checkbox.first.click()
-                human_wait(2, 4)
-                wait_for_captcha_challenge_resolution(page)
-                return True
-        except Exception as e:
-            print(f"  (captcha check on '{sel}' failed: {e})")
-            continue
-
-    return False
-
-
-def find_ai_mode_button(page):
-    ai_mode_selectors = [
-        'div[role="tab"]:has-text("AI Mode")',
-        'a[role="tab"]:has-text("AI Mode")',
-        'button:has-text("AI Mode")',
-        'a:has-text("AI Mode")',
-        '[aria-label="AI Mode"]',
-        '[aria-label*="AI Mode"]',
-        'text=AI Mode',
-    ]
-    frames_to_check = [page.main_frame] + page.frames
-    for frame in frames_to_check:
-        for sel in ai_mode_selectors:
-            try:
-                loc = frame.locator(sel)
-                if loc.count() > 0 and loc.first.is_visible():
-                    return loc.first
-            except Exception:
-                pass
-    return None
-
-
-def wait_for_response_stable(page, max_wait=30, check_interval=1.0, stable_checks=3):
-    start = time.time()
-    last_text = ""
-    stable_count = 0
-    while time.time() - start < max_wait:
-        if not check_internet():
-            wait_for_internet()
-            start = time.time()
-            last_text = ""
-            stable_count = 0
-            continue
-        try:
-            current_text = page.locator("body").inner_text()
-        except Exception:
-            current_text = ""
-        if current_text == last_text and current_text.strip():
-            stable_count += 1
-            if stable_count >= stable_checks:
-                return current_text
-        else:
-            stable_count = 0
-        last_text = current_text
-        time.sleep(check_interval)
-    return last_text
-
-
 def list_images(directory: Path) -> list:
     return (sorted(directory.glob("*.[jJ][pP][gG]")) +
             sorted(directory.glob("*.[jJ][pP][eE][gG]")) +
@@ -330,9 +479,9 @@ def save_sidecar(image_name: str, data: dict, layout: dict, source_file: str, ou
     """Write the editable record that the browser editor (--edit) reads/writes."""
     record = {
         "image_name": image_name,
-        "source_file": source_file,    # path to the ORIGINAL uploaded image (relative to project root)
-        "output_file": output_file,    # path to the rendered card PNG
-        "template_file": template_file,  # which template the card was rendered on
+        "source_file": source_file,
+        "output_file": output_file,
+        "template_file": template_file,
         "data": data,
         "layout": layout,
     }
@@ -344,14 +493,7 @@ def save_sidecar(image_name: str, data: dict, layout: dict, source_file: str, ou
 
 def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratios=None, enhance_photo=False,
                   photo_source_path: Path = None):
-    """Render the card for the first time and save an editable sidecar next to it.
-
-    Uses the active template (if one was designed with `--new`), otherwise
-    falls back to the original hard-coded template.png layout.
-
-    `photo_source_path`, when given, is the file the student photo is taken
-    from (an external image from student_images/). The crop is then computed
-    by face-detecting the WHOLE image, ignoring any Google Lens bbox ratios."""
+    """Render the card for the first time and save an editable sidecar next to it."""
     CARD_DIR.mkdir(parents=True, exist_ok=True)
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
     output_path = CARD_DIR / f"{Path(image_name).stem}_filled.png"
@@ -384,8 +526,6 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
     if crop_rect is None:
         print("  No face detected in source image - photo left blank (adjust the crop in --edit).")
 
-    # Source file will live under completed/ once the pass finishes moving it;
-    # we record that expected final location so the editor can find it later.
     if photo_source_path:
         source_rel = str(Path("completed") / "student" / Path(photo_source_path).name)
     else:
@@ -394,111 +534,18 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
     return output_path
 
 
-def process_single_image(page, image_path: Path, enhance_photo=False, student_photo_path: Path = None):
-    image_path_str = str(image_path.resolve())
+def process_single_image(image_path: Path, enhance_photo=False, student_photo_path: Path = None):
     print(f"\n--- Processing: {image_path.name} ---")
+    groq_ready = get_groq_client() is not None
+    provider_info = f"{GEMINI_MODEL} (Gemini {GEMINI_RPM} RPM" + (f" + Groq {GROQ_MODEL} fallback)" if groq_ready else ")")
+    print(f"  Sending to {provider_info}...")
 
-    print("  Resetting page state...")
-    try:
-        if page.url != "about:blank":
-            goto_with_retry(page, "about:blank", wait_until="domcontentloaded", timeout=10000)
-    except Exception:
-        pass
-    human_wait(0.5, 1)
-    print("  Opening Google Images...")
-    goto_with_retry(page, "https://images.google.com", wait_until="networkidle")
-    human_wait(3, 5)
+    raw_text = call_image_with_fallback(image_path)
+    log_detail(f"[{image_path.name}] Gemini raw response:\n{raw_text[:4000]}")
 
-    for text in ["Accept all", "I agree", "Reject all"]:
-        try:
-            btn = page.get_by_role("button", name=text)
-            if btn.count() > 0 and btn.first.is_visible():
-                human_click(page, btn.first)
-                human_wait(1, 2)
-                break
-        except Exception:
-            pass
-
-    handle_captcha(page)
-
-    print("  Looking for Lens button...")
-    lens = None
-    selectors = [
-        'div[aria-label="Search by image"]',
-        'button[aria-label*="Lens"]',
-        'button[aria-label*="Search by image"]',
-        '[aria-label*="Lens"]',
-        '[aria-label*="Search by image"]',
-        'div[role="button"][aria-label*="Lens"]',
-    ]
-    for sel in selectors:
-        try:
-            loc = page.locator(sel)
-            if loc.count() > 0:
-                lens = loc.first
-                break
-        except Exception:
-            pass
-
-    if lens is None:
-        raise RuntimeError("Lens button not found")
-
-    print("  Clicking Lens (human-style)...")
-    human_click(page, lens)
-    human_wait(1.5, 3)
-
-    file_inputs = page.locator("input[type=file]")
-    if file_inputs.count() == 0:
-        raise RuntimeError("No upload input found")
-
-    print(f"  Uploading: {image_path.name}")
-    file_inputs.first.set_input_files(image_path_str)
-
-    print("  Waiting for Lens results to load...")
-    page.wait_for_timeout(8000)
-    handle_captcha(page)
-    page.screenshot(path=str(TEMP_DIR / "03_after_upload_full.png"), full_page=True)
-
-    print("  Looking for 'AI Mode' tab...")
-    ai_mode = find_ai_mode_button(page)
-
-    if ai_mode is None:
-        page.screenshot(path=str(TEMP_DIR / "ai_mode_not_found.png"), full_page=True)
-        print(f"  Screenshot saved: {TEMP_DIR / 'ai_mode_not_found.png'}")
-        raise RuntimeError("Could not find 'AI Mode' tab")
-
-    print("  Clicking AI Mode (human-style)...")
-    human_click(page, ai_mode)
-    human_wait(1.5, 3)
-    page.screenshot(path=str(TEMP_DIR / "03b_after_ai_mode.png"), full_page=True)
-
-    print("  Looking for 'Ask anything' input...")
-    ask_box, ask_frame = find_ask_box_all_frames(page)
-
-    if ask_box is None:
-        page.screenshot(path=str(TEMP_DIR / "ask_box_not_found.png"), full_page=True)
-        print(f"  Screenshot saved: {TEMP_DIR / 'ask_box_not_found.png'}")
-        raise RuntimeError("Could not find 'Ask anything' box")
-
-    print("  Clicking ask box and typing prompt...")
-    ask_box.scroll_into_view_if_needed()
-    human_wait(0.5, 1)
-    ask_box.click()
-    human_wait(0.5, 1)
-
-    page.wait_for_timeout(1000)
-    ask_box.fill(PROMPT)
-    human_wait(0.5, 1)
-    ask_box.press("Enter")
-
-    print("  Waiting for response...")
-    time.sleep(2)
-    body = wait_for_response_stable(page, max_wait=70, check_interval=1.0, stable_checks=3)
-    page.screenshot(path=str(TEMP_DIR / "04_response_full.png"), full_page=True)
-
-    data = extract_json(body)
+    data = extract_json(raw_text)
     if data is None:
-        log_detail(f"[{image_path.name}] Could not parse JSON. Raw page text:\n{body}")
+        log_detail(f"[{image_path.name}] Could not parse JSON. Raw text:\n{raw_text}")
         raise BadJSONResponseError(
             "Response wasn't valid JSON (full text saved to temp/run_log.txt)"
         )
@@ -544,12 +591,6 @@ def cleanup_temp_screenshots():
 
 
 def _move_to_completed(src_path, form_name, is_student_photo=False, external_student_image=False):
-    """Move src_path into completed/. In external-student-image mode the form
-    goes to completed/form/ and its paired photo to completed/student/ (the same
-    form/student split as retry/), keeping the pairing's sequence intact. If a
-    form and its paired photo share a name, the photo gets a '<stem>_photo<ext>'
-    suffix. Patches the record sidecar's source_file so the browser editor still
-    finds the image."""
     if external_student_image:
         target_dir = COMPLETED_STUDENT_DIR if is_student_photo else COMPLETED_FORM_DIR
     else:
@@ -573,12 +614,6 @@ def _move_to_completed(src_path, form_name, is_student_photo=False, external_stu
 
 
 def _copy_to_retry(form_path, student_photo_path, external_student_image=False):
-    """Move/copy a failed (form, student photo) job into the retry area.
-
-    Normal mode keeps the old flat retry/ folder. External-student-image mode
-    MOVES the form to retry/form/ and its paired student photo to retry/student/
-    so image/ + student_images/ stay paired 1:1 and a re-run won't reprocess
-    already-failed pairs. Returns (retry_form_path, retry_student_path)."""
     RETRY_DIR.mkdir(exist_ok=True)
     if external_student_image:
         RETRY_FORM_DIR.mkdir(parents=True, exist_ok=True)
@@ -596,9 +631,8 @@ def _copy_to_retry(form_path, student_photo_path, external_student_image=False):
     return retry_path, None
 
 
-def process_image_pass(page, jobs, label, pass_start, enhance_photo=False, external_student_image=False):
-    """Process a list of jobs. Each job is a tuple (form_path, student_photo_path)
-    where student_photo_path is None in normal mode."""
+def process_image_pass(jobs, label, pass_start, enhance_photo=False, external_student_image=False):
+    """Process a list of jobs. Each job is a tuple (form_path, student_photo_path)"""
     total = len(jobs)
     done = 0
     failed = 0
@@ -619,12 +653,37 @@ def process_image_pass(page, jobs, label, pass_start, enhance_photo=False, exter
         bad_json_batch.clear()
 
     while queue:
+        # --- UI stop check ---
+        if should_stop():
+            print(f"\n  ■ Stopped by user — {len(queue)+1} remaining will stay in {IMAGE_DIR}/")
+            log_detail(f"[STOP] User stopped batch, {len(queue)+1} remaining")
+            # put current + remaining back to image folder (they are already there unless moved)
+            # ensure stop flag cleared for next run
+            clear_stop()
+            try:
+                (TEMP_DIR / "stop_requested").unlink(missing_ok=True)
+            except Exception:
+                pass
+            break
         form_path, student_path = queue.popleft()
         img_start = time.time()
         finished = False
         while not finished:
+            # also check stop inside retry loop (e.g., during quota wait)
+            if should_stop():
+                print(f"\n  ■ Stop requested — aborting {form_path.name}")
+                queue.appendleft((form_path, student_path))
+                clear_stop()
+                try:
+                    (TEMP_DIR / "stop_requested").unlink(missing_ok=True)
+                except Exception:
+                    pass
+                finished = True
+                # break outer while via flag
+                queue.clear()
+                break
             try:
-                process_single_image(page, form_path, enhance_photo=enhance_photo, student_photo_path=student_path)
+                process_single_image(form_path, enhance_photo=enhance_photo, student_photo_path=student_path)
                 cleanup_temp_screenshots()
                 _move_to_completed(form_path, form_path.name, external_student_image=external_student_image)
                 if student_path:
@@ -657,6 +716,22 @@ def process_image_pass(page, jobs, label, pass_start, enhance_photo=False, exter
                 finished = True
 
             except Exception as e:
+                if is_daily_quota_error(str(e)) and get_groq_client() is None:
+                    # No Groq to fallback to — abort the whole batch cleanly instead of 86 x 1m42s failures.
+                    print(f"\n  ✗ Daily Gemini quota exhausted (20/day) on {form_path.name}. Stopping batch.")
+                    print(f"    → Options: 1) Add GROQ_API_KEY for fallback, 2) wait until midnight Pacific, 3) use a second Google Cloud project key.")
+                    print(f"    → Remaining {len(queue)+1} image(s) left untouched in {IMAGE_DIR}/ — re-run after fixing quota.")
+                    log_detail(f"[{form_path.name}] DAILY QUOTA ABORT: {traceback.format_exc()}")
+                    # put current + remaining queue into retry so nothing is lost
+                    retry_jobs.append(_copy_to_retry(form_path, student_path, external_student_image))
+                    for q_form, q_student in list(queue):
+                        retry_jobs.append(_copy_to_retry(q_form, q_student, external_student_image))
+                    failed += 1 + len(queue)
+                    done += 1 + len(queue)
+                    queue.clear()
+                    finished = True
+                    break
+
                 if is_network_error(e) or not check_internet():
                     print(f"\n  ⚠ Network issue while processing {form_path.name}: {short_error(e)}")
                     log_detail(f"[{form_path.name}] NETWORK ERROR:\n{traceback.format_exc()}")
@@ -698,9 +773,40 @@ def scrape_main(enhance_photo=False, external_student_image=False):
     COMPLETED_DIR.mkdir(exist_ok=True)
     TEMP_DIR.mkdir(exist_ok=True)
 
+    # sync last used models from premium UI config if present
+    try:
+        try:
+            import config_store as _cs
+        except ModuleNotFoundError:
+            from main import config_store as _cs
+        gm = _cs.get_last_model("gemini")
+        gg = _cs.get_last_model("groq")
+        global GEMINI_MODEL, GROQ_MODEL
+        if gm:
+            GEMINI_MODEL = gm
+        if gg:
+            GROQ_MODEL = gg
+    except Exception:
+        pass
+
     all_images = list_images(IMAGE_DIR)
     if not all_images:
         print(f"No images found in {IMAGE_DIR}")
+        return
+
+    # Validate Gemini + Groq keys before starting
+    try:
+        get_gemini_client()
+        groq_client = get_groq_client()
+        if groq_client:
+            print(f"✓ Gemini ready ({GEMINI_MODEL}, ~{GEMINI_RPM} RPM throttled, 20/day cap) + Groq ready ({GROQ_MODEL}, ~{GROQ_RPM} RPM)")
+            print(f"  ℹ Free tier daily caps: Gemini 20/day per model, Groq 1000 OTPM + 30 RPM. Batch of 86 will need 4+ days or multiple keys.")
+        else:
+            print(f"✓ Gemini ready ({GEMINI_MODEL}, ~{GEMINI_RPM} RPM throttled, 20/day cap)")
+            print(f"  ℹ For fallback when Gemini daily quota hits, add Groq: export GROQ_API_KEY='gsk_...' from https://console.groq.com/keys (free)")
+            print(f"  ℹ 86 images exceeds Gemini 20/day free limit — will stall after ~20 without Groq or extra keys.")
+    except Exception as e:
+        print(f"\n✗ {e}")
         return
 
     if external_student_image:
@@ -726,77 +832,45 @@ def scrape_main(enhance_photo=False, external_student_image=False):
 
     total = len(jobs)
     print(f"\nFound {total} image(s) to process. Estimating time after the first one...\n")
+    print(f"  Throttled: ~{fmt_time(60/GEMINI_RPM)} per image + processing (daily cap: 20 Gemini / 1000 Groq tokens)")
+    if total > 20 and get_groq_client() is None:
+        print(f"  ⚠ WARNING: {total} > 20 daily Gemini free limit — will hit 429. Add GROQ_API_KEY or --use multiple projects.")
+    print()
 
-    with sync_playwright() as p:
-        context = p.firefox.launch_persistent_context(
-            user_data_dir="/home/coded_mind__/.mozilla/firefox/e0uaw6ea.default-esr",
-            headless=False,
-            viewport={"width": 1366, "height": 768},
-            locale="en-IN",
-            timezone_id="Asia/Kolkata",
-        )
+    pass_start = time.time()
+    done, failed, retry_jobs = process_image_pass(jobs, "Processing", pass_start,
+                                                   enhance_photo=enhance_photo,
+                                                   external_student_image=external_student_image)
 
-        page = context.pages[0] if context.pages else context.new_page()
+    if retry_jobs:
+        print(f"\n=== Retrying {len(retry_jobs)} image(s) ===")
+        retry_pass_start = time.time()
+        retry_done, retry_failed, still_failed = process_image_pass(retry_jobs, "Retry", retry_pass_start,
+                                                                     enhance_photo=enhance_photo,
+                                                                     external_student_image=external_student_image)
 
-        pass_start = time.time()
-
-        done, failed, retry_jobs = process_image_pass(page, jobs, "Processing", pass_start,
-                                                      enhance_photo=enhance_photo,
-                                                      external_student_image=external_student_image)
-
-        if retry_jobs:
-            print(f"\n=== Restarting browser for retry of {len(retry_jobs)} image(s) ===")
-            context.close()
-            context = p.firefox.launch_persistent_context(
-                user_data_dir="/home/coded_mind__/.mozilla/firefox/e0uaw6ea.default-esr",
-                headless=False,
-                viewport={"width": 1366, "height": 768},
-                locale="en-IN",
-                timezone_id="Asia/Kolkata",
-            )
-            page = context.pages[0] if context.pages else context.new_page()
-
-            retry_pass_start = time.time()
-            retry_done, retry_failed, still_failed = process_image_pass(page, retry_jobs, "Retry", retry_pass_start,
-                                                                        enhance_photo=enhance_photo,
-                                                                        external_student_image=external_student_image)
-
-            if still_failed:
-                print(f"\n=== {len(still_failed)} image(s) still failed after retry ===")
-                for form_path, _ in still_failed:
-                    print(f"  {form_path.name}")
-                if external_student_image:
-                    print("Forms remain in retry/form/ and their student photos in retry/student/.")
-                else:
-                    print("These remain in the retry folder.")
+        if still_failed:
+            print(f"\n=== {len(still_failed)} image(s) still failed after retry ===")
+            for form_path, _ in still_failed:
+                print(f"  {form_path.name}")
+            if external_student_image:
+                print("Forms remain in retry/form/ and their student photos in retry/student/.")
             else:
-                print("\n=== All retries succeeded! ===")
+                print("These remain in the retry folder.")
         else:
-            print("\n=== All images processed successfully! ===")
-
-        input("\nPress ENTER to close browser...")
-        context.close()
+            print("\n=== All retries succeeded! ===")
+    else:
+        print("\n=== All images processed successfully! ===")
 
 
 def archive_current_template(name: str) -> bool:
-    """Mark the current batch as 'old' by snapshotting EVERYTHING needed to
-    work on / edit it later into history/<name>.zip:
-      image/  - unprocessed input photos
-      student_images/ - external student photos (used with --external-student-image)
-      output/ - rendered cards (output/cards) + editable records (output/records)
-      completed/ - processed photos (the originals moved after a successful pass)
-      retry/  - photos that failed and are queued for a retry (form/ + student/ subfolders)
-      temp/   - run logs / screenshots
-      templates/ + template.png - the template design + base fallback image
-    The zip keeps the project's top-level layout, so `--given-name` can put it
-    all back exactly where it belongs. Returns True on success."""
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     target = HISTORY_DIR / f"{name}.zip"
     if target.exists():
         print(f"  {target} already exists. Pick a different name or delete it first.")
         return False
 
-    paths = ["image", "student_images", "output", "completed", "retry", "temp", "templates", "template.png"]
+    paths = ["image", "student_images", "output", "completed", "retry", "temp", "templates", "template.png", "pdf"]
     count = 0
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
         for rel in paths:
@@ -813,8 +887,6 @@ def archive_current_template(name: str) -> bool:
                 count += 1
     print(f"  ✓ Archived current batch ({count} files) -> {target}")
 
-    # The batch is now safely stored in the zip — clear it from the workspace so
-    # you can start a fresh batch. Everything is restored later with --given-name.
     cleaned = []
     for rel in paths:
         p = Path(rel)
@@ -832,9 +904,6 @@ def archive_current_template(name: str) -> bool:
 
 
 def restore_archive(name: str) -> bool:
-    """Use an archived batch: restore history/<name>.zip back into the project
-    root, replacing the current work, so you can continue editing/processing
-    that batch exactly where you left off."""
     target = HISTORY_DIR / f"{name}.zip"
     if not target.exists():
         print(f"  ✗ No archived batch named '{name}' (looked for {target}).")

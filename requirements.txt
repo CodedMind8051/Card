@@ -11,5 +11,10 @@ Pillow>=10.0.0
 flask>=3.0.0
 werkzeug>=3.0.0
 
-# Browser automation (Google Lens AI Mode scraping)
+# Gemini API (free tier) - replaces Playwright Google Lens scraping
+google-genai>=0.3.0
+# Groq fallback (free tier) - 30 RPM / 1000 RPD vision model for when Gemini 503/429s
+groq>=0.11.0
+
+# Browser automation (kept for template designer/editor only - not needed for scraping)
 playwright>=1.40.0

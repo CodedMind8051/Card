@@ -1,0 +1,30 @@
+{
+  "keys": [
+    {
+      "id": "214be6aa00f3",
+      "provider": "gemini",
+      "label": "idcard",
+      "key": "AQ.Ab8RN6IubCU2B_p0V9HMoqyZJdtdO9en614HyGR37AKjuEBHqQ",
+      "created_at": "2026-09-13T09:22:50.126004+00:00",
+      "last_used": null
+    }
+  ],
+  "active": {
+    "gemini": "214be6aa00f3"
+  },
+  "models": {
+    "gemini": {
+      "last_used": "gemini-3.1-flash-lite",
+      "custom": [
+        "gemini-3.1-flash-lite"
+      ]
+    },
+    "groq": {
+      "last_used": "qwen/qwen3.6-27b",
+      "custom": []
+    }
+  },
+  "settings": {
+    "theme": "dark"
+  }
+}

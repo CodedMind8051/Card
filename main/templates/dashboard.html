@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CardForge — Studio</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<script>tailwind.config={theme:{extend:{fontFamily:{sans:['Inter','sans-serif'],mono:['JetBrains Mono','monospace']}}}}</script>
+<style>
+  .card{background:#111113;border:1px solid #1f1f23}
+  .card-soft{background:#0f0f11;border:1px solid #1f1f23}
+  .btn-accent{background:#7c3aed;color:#fff}
+  .btn-accent:hover{background:#6d28e6}
+  .btn-ghost{background:#111113;border:1px solid #1f1f23}
+  .btn-ghost:hover{background:#1a1a1e;border-color:#2a2a30}
+  .nav-active{background:#1a1a1e;border-color:#2a2a30 !important;color:#fff}
+  *{scrollbar-width:thin;scrollbar-color:#2a2a30 transparent}
+  ::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-thumb{background:#2a2a30;border-radius:999px}
+</style>
+</head>
+<body class="bg-[#09090b] text-zinc-100 antialiased">
+<div class="min-h-screen flex">
+  <!-- Sidebar -->
+  <aside class="hidden lg:flex w-[260px] shrink-0 flex-col border-r border-[#1f1f23] bg-[#0c0c0e] sticky top-0 h-screen overflow-y-auto">
+    <div class="px-6 py-6 shrink-0">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-white text-black flex items-center justify-center font-bold">◈</div>
+        <div><div class="font-semibold leading-none">CardForge</div><div class="text-[11px] tracking-widest text-zinc-500 font-medium">STUDIO</div></div>
+      </div>
+    </div>
+    <nav class="px-3 flex-1 space-y-1">
+      <button data-nav="dashboard" class="nav-btn nav-active w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent text-[13px] font-medium text-zinc-400"> <span class="w-5 text-center">◐</span> Dashboard</button>
+      <button data-nav="templates" class="nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent text-[13px] font-medium text-zinc-400 hover:text-zinc-200 hover:bg-[#141416]"> <span class="w-5 text-center">▦</span> Templates</button>
+      <button data-nav="editor" class="nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent text-[13px] font-medium text-zinc-400 hover:text-zinc-200 hover:bg-[#141416]"> <span class="w-5 text-center">✎</span> Editor</button>
+      <button data-nav="history" class="nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent text-[13px] font-medium text-zinc-400 hover:text-zinc-200 hover:bg-[#141416]"> <span class="w-5 text-center">◷</span> History</button>
+      <button data-nav="work" class="nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent text-[13px] font-medium text-zinc-400 hover:text-zinc-200 hover:bg-[#141416]"> <span class="w-5 text-center">⚡</span> Work <span id="badge-pending" class="ml-auto text-[11px] bg-[#7c3aed] text-white px-2 py-0.5 rounded-full hidden">0</span></button>
+      <button data-nav="settings" class="nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent text-[13px] font-medium text-zinc-400 hover:text-zinc-200 hover:bg-[#141416]"> <span class="w-5 text-center">⚙</span> Settings</button>
+      <button data-nav="pdf" class="nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent text-[13px] font-medium text-zinc-400 hover:text-zinc-200 hover:bg-[#141416]"> <span class="w-5 text-center">▤</span> PDF Maker</button>
+    </nav>
+    <div class="p-4 border-t border-[#1f1f23] space-y-3">
+      <div class="card rounded-2xl p-4">
+        <div class="text-[11px] font-semibold tracking-widest text-zinc-500">QUOTA</div>
+        <div class="mt-2 space-y-2 text-xs">
+          <div class="flex justify-between"><span class="text-zinc-500">Gemini</span><span class="font-mono">20 / day</span></div>
+          <div class="h-1.5 bg-[#1a1a1e] rounded-full"><div class="h-full bg-[#7c3aed] rounded-full" style="width:42%"></div></div>
+          <div class="flex justify-between"><span class="text-zinc-500">Groq</span><span class="font-mono">1,000 OTPM</span></div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-xs text-zinc-500"><span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span> Ready <span id="clock" class="ml-auto font-mono">--:--</span></div>
+    </div>
+  </aside>
+
+  <!-- Mobile top -->
+  <div class="lg:hidden fixed top-0 inset-x-0 z-30 bg-[#0c0c0e] border-b border-[#1f1f23]">
+    <div class="flex items-center gap-1 px-3 py-3 overflow-x-auto" id="mobile-nav"></div>
+  </div>
+
+  <!-- Main -->
+  <main class="flex-1 min-w-0">
+    <div class="max-w-[1160px] mx-auto px-5 lg:px-8 py-6 lg:py-8 mt-12 lg:mt-0">
+      <!-- Header -->
+      <div class="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 class="text-[24px] font-semibold tracking-tight" id="page-title">Dashboard</h1>
+          <p class="text-[13px] text-zinc-500 mt-1" id="page-sub">Actual last used model, keys and work overview</p>
+        </div>
+        <div class="flex gap-2">
+          <span class="hidden sm:inline-flex items-center gap-2 text-xs text-zinc-500 border border-[#1f1f23] bg-[#111113] rounded-full px-3 py-1.5"><span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span> Operational</span>
+          <button onclick="switchNav('settings')" class="btn-accent px-4 py-2 rounded-full text-[13px] font-medium">Add Key</button>
+        </div>
+      </div>
+
+      <!-- ============ DASHBOARD ============ -->
+      <section data-section="dashboard" class="mt-6 space-y-4">
+        <!-- Last used + keys + work -->
+        <div class="grid lg:grid-cols-3 gap-4">
+          <div class="card rounded-2xl p-5">
+            <div class="text-[11px] tracking-widest font-semibold text-zinc-500">LAST USED MODEL</div>
+            <div class="mt-3 space-y-2">
+              <div class="flex items-center justify-between bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5">
+                <span class="text-xs text-zinc-500">Gemini</span>
+                <span class="font-mono text-xs font-medium" id="dash-gemini-model">—</span>
+              </div>
+              <div class="flex items-center justify-between bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5">
+                <span class="text-xs text-zinc-500">Groq</span>
+                <span class="font-mono text-xs font-medium" id="dash-groq-model">—</span>
+              </div>
+            </div>
+            <div class="mt-3 text-xs text-zinc-500">Used for next batch • <button onclick="switchNav('settings')" class="text-violet-400 hover:underline">change in Settings</button></div>
+          </div>
+          <div class="card rounded-2xl p-5">
+            <div class="text-[11px] tracking-widest font-semibold text-zinc-500">ACTIVE API KEYS</div>
+            <div id="dash-keys" class="mt-3 space-y-2"></div>
+            <div class="mt-3 text-xs text-zinc-500" id="dash-keys-count">—</div>
+          </div>
+          <div class="card rounded-2xl p-5">
+            <div class="text-[11px] tracking-widest font-semibold text-zinc-500">WORK</div>
+            <div class="mt-3 grid grid-cols-3 gap-2 text-center">
+              <div class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl py-3"><div class="text-lg font-semibold" id="dash-pending">—</div><div class="text-[11px] text-zinc-500">Pending</div></div>
+              <div class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl py-3"><div class="text-lg font-semibold" id="dash-completed">—</div><div class="text-[11px] text-zinc-500">Completed</div></div>
+              <div class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl py-3"><div class="text-lg font-semibold" id="dash-retry">—</div><div class="text-[11px] text-zinc-500">Retry</div></div>
+            </div>
+            <div class="mt-3 flex gap-2">
+              <button onclick="switchNav('work')" class="flex-1 btn-accent rounded-full py-2 text-xs font-medium">Open Work</button>
+              <button onclick="switchNav('history')" class="flex-1 btn-ghost rounded-full py-2 text-xs font-medium">History</button>
+            </div>
+          </div>
+        </div>
+        <!-- Stats row -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div class="card rounded-2xl p-4"><div class="text-[11px] tracking-widest font-semibold text-zinc-500">CARDS</div><div class="text-xl font-semibold mt-1" id="stat-cards">—</div><div class="text-xs text-zinc-500">rendered</div></div>
+          <div class="card rounded-2xl p-4"><div class="text-[11px] tracking-widest font-semibold text-zinc-500">TEMPLATES</div><div class="text-xl font-semibold mt-1" id="stat-templates">—</div><div class="text-xs text-zinc-500">designed</div></div>
+          <div class="card rounded-2xl p-4"><div class="text-[11px] tracking-widest font-semibold text-zinc-500">PDFS</div><div class="text-xl font-semibold mt-1" id="stat-pdfs">—</div><div class="text-xs text-zinc-500">generated</div></div>
+          <div class="card rounded-2xl p-4"><div class="text-[11px] tracking-widest font-semibold text-zinc-500">HISTORY</div><div class="text-xl font-semibold mt-1" id="stat-history">—</div><div class="text-xs text-zinc-500">archives</div></div>
+        </div>
+        <!-- Quick actions + activity -->
+        <div class="grid lg:grid-cols-5 gap-4">
+          <div class="lg:col-span-3 card rounded-2xl p-5">
+            <h3 class="text-sm font-semibold">Quick actions</h3>
+            <div class="grid grid-cols-3 gap-3 mt-4">
+              <button onclick="switchNav('work')" class="card-soft rounded-2xl p-4 text-left hover:border-zinc-700"><div class="w-8 h-8 rounded-lg bg-white text-black flex items-center justify-center">⚡</div><div class="text-sm font-medium mt-3">Start Work</div><div class="text-xs text-zinc-500">Make cards</div></button>
+              <button onclick="switchNav('templates')" class="card-soft rounded-2xl p-4 text-left hover:border-zinc-700"><div class="w-8 h-8 rounded-lg bg-white text-black flex items-center justify-center">▦</div><div class="text-sm font-medium mt-3">Templates</div><div class="text-xs text-zinc-500">Past used</div></button>
+              <button onclick="switchNav('pdf')" class="card-soft rounded-2xl p-4 text-left hover:border-zinc-700"><div class="w-8 h-8 rounded-lg bg-white text-black flex items-center justify-center">▤</div><div class="text-sm font-medium mt-3">Make PDF</div><div class="text-xs text-zinc-500">Export</div></button>
+            </div>
+          </div>
+          <div class="lg:col-span-2 card rounded-2xl p-5 flex flex-col">
+            <h3 class="text-sm font-semibold">Activity</h3>
+            <div id="recent-log" class="mt-3 flex-1 min-h-[120px] space-y-1 text-xs font-mono text-zinc-500 overflow-auto"></div>
+            <button onclick="switchNav('work')" class="mt-4 w-full bg-white text-black rounded-full py-2.5 text-sm font-medium">View Work</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ TEMPLATES ============ -->
+      <section data-section="templates" class="mt-6 hidden space-y-4">
+        <div class="card rounded-2xl p-5">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="text-sm font-semibold">Template Maker</h3>
+              <p class="text-xs text-zinc-500 mt-1">Past templates • Last used is active by default</p>
+            </div>
+            <span id="active-template-badge" class="hidden text-xs px-2.5 py-1 rounded-full bg-[#7c3aed] text-white">active: —</span>
+          </div>
+          <div class="mt-4 border border-dashed border-[#2a2a30] rounded-2xl p-6 text-center bg-[#0f0f11]">
+            <input id="template-input" type="file" accept="image/*" class="hidden">
+            <button onclick="document.getElementById('template-input').click()" class="btn-accent px-5 py-2 rounded-full text-sm">Upload Template Image</button>
+            <div class="text-xs text-zinc-500 mt-2">PNG / JPG blank card — will appear below and in Designer</div>
+          </div>
+          <div id="templates-grid" class="mt-5 grid sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+          <div class="mt-4 flex gap-2">
+            <a href="/designer" target="_blank" class="flex-1 btn-ghost rounded-full py-2.5 text-center text-sm">Open Full Designer →</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ EDITOR ============ -->
+      <section data-section="editor" class="mt-6 hidden space-y-4">
+        <div class="card rounded-2xl p-5">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-semibold">Editor — All Cards</h3>
+              <p class="text-xs text-zinc-500 mt-1"><span id="editor-count">—</span> rendered cards • click Edit to open full editor</p>
+            </div>
+            <div class="flex gap-2">
+              <input id="editor-search" placeholder="Search name…" class="bg-[#0a0a0c] border border-[#1f1f23] rounded-full px-3 py-1.5 text-sm w-[160px]">
+              <a href="/editor" target="_blank" class="btn-accent px-4 py-1.5 rounded-full text-sm">Open Editor</a>
+            </div>
+          </div>
+          <div id="editor-grid" class="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3"></div>
+        </div>
+      </section>
+
+      <!-- ============ HISTORY ============ -->
+      <section data-section="history" class="mt-6 hidden space-y-4">
+        <div class="card rounded-2xl p-5">
+          <h3 class="text-sm font-semibold">Current Work</h3>
+          <div class="mt-3 grid grid-cols-3 gap-2 text-center text-sm">
+            <div class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl py-3"><div class="font-semibold" id="hist-pending">—</div><div class="text-xs text-zinc-500">Pending</div></div>
+            <div class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl py-3"><div class="font-semibold" id="hist-completed">—</div><div class="text-xs text-zinc-500">Completed</div></div>
+            <div class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl py-3"><div class="font-semibold" id="hist-cards">—</div><div class="text-xs text-zinc-500">Cards</div></div>
+          </div>
+          <div class="mt-4 flex gap-2">
+            <input id="wrapup-name" placeholder="Archive name — e.g. batch-86" class="flex-1 bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm">
+            <button id="btn-wrapup" class="btn-accent px-5 rounded-xl text-sm font-medium">Save / Wrap-up</button>
+          </div>
+          <div class="text-xs text-zinc-500 mt-2">Saves <span class="font-mono">image, student_images, output, completed, retry, temp, templates, pdf</span> to <span class="font-mono">history/<name>.zip</span> and <b>clears them</b> for next batch. History + config are kept.</div>
+        </div>
+        <div class="card rounded-2xl p-5">
+          <div class="flex items-center justify-between"><h3 class="text-sm font-semibold">History — Previous Works</h3><span class="text-xs text-zinc-500" id="history-count">—</span></div>
+          <div id="history-grid" class="mt-4 space-y-2"></div>
+        </div>
+      </section>
+
+      <!-- ============ WORK ============ -->
+      <section data-section="work" class="mt-6 hidden space-y-4">
+        <!-- Overviews -->
+        <div class="grid lg:grid-cols-3 gap-4">
+          <div class="card rounded-2xl p-5">
+            <div class="flex items-center justify-between"><h4 class="text-sm font-semibold">Left Work</h4><span class="text-xs font-mono text-zinc-500" id="work-pending-count">—</span></div>
+            <div class="text-xs text-zinc-500 mt-1">in <span class="font-mono">image/</span> <span id="work-student-hint" class="hidden">+ student_images</span></div>
+            <div id="work-pending-list" class="mt-3 max-h-[160px] overflow-auto space-y-1 text-xs font-mono text-zinc-400"></div>
+          </div>
+          <div class="card rounded-2xl p-5">
+            <div class="flex items-center justify-between"><h4 class="text-sm font-semibold">Completed</h4><span class="text-xs font-mono text-zinc-500" id="work-completed-count">—</span></div>
+            <div class="text-xs text-zinc-500 mt-1">in <span class="font-mono">completed/</span> + <span class="font-mono">output/cards/</span></div>
+            <div id="work-completed-list" class="mt-3 max-h-[160px] overflow-auto grid grid-cols-3 gap-2"></div>
+          </div>
+          <div class="card rounded-2xl p-5">
+            <div class="flex items-center justify-between"><h4 class="text-sm font-semibold">Retry</h4><span class="text-xs font-mono text-zinc-500" id="work-retry-count">—</span></div>
+            <div class="text-xs text-zinc-500 mt-1">failed → <span class="font-mono">retry/</span></div>
+            <div id="work-retry-list" class="mt-3 max-h-[160px] overflow-auto space-y-1 text-xs font-mono text-zinc-400"></div>
+          </div>
+        </div>
+        <!-- Start -->
+        <div class="card rounded-2xl p-5">
+          <h3 class="text-sm font-semibold">Start Card Making</h3>
+          <p class="text-xs text-zinc-500 mt-1">All options • select forms and student images</p>
+          <!-- Form select -->
+          <div class="mt-4">
+            <div class="text-xs font-medium text-zinc-400 mb-2">1. Forms — <span class="font-mono">image/</span></div>
+            <div id="work-drop" class="border border-dashed border-[#2a2a30] rounded-2xl p-6 text-center hover:border-zinc-700 cursor-pointer bg-[#0f0f11]">
+              <div class="w-10 h-10 rounded-xl bg-white text-black flex items-center justify-center mx-auto">↑</div>
+              <div class="text-sm font-medium mt-2">Drop forms here or click</div>
+              <div class="text-xs text-zinc-500">PNG / JPG • auto-saved to image/</div>
+              <input id="work-file-input" type="file" multiple accept="image/*" class="hidden">
+              <div id="work-upload-list" class="mt-2 text-xs font-mono text-zinc-500"></div>
+            </div>
+            <div id="work-forms-preview" class="mt-3 grid grid-cols-6 gap-2"></div>
+          </div>
+          <!-- External student image -->
+          <div class="mt-5">
+            <label class="flex items-center gap-3 card-soft rounded-xl px-4 py-3 cursor-pointer">
+              <input id="opt-external" type="checkbox" class="accent-[#7c3aed]">
+              <div class="flex-1">
+                <div class="text-sm font-medium">Use external student photo</div>
+                <div class="text-xs text-zinc-500">Pair <span class="font-mono">image/</span> with <span class="font-mono">student_images/</span> 1:1 by file order</div>
+              </div>
+              <span class="text-xs font-mono text-zinc-500" id="student-count">0 student</span>
+            </label>
+            <div id="student-section" class="hidden mt-3">
+              <div id="student-drop" class="border border-dashed border-[#2a2a30] rounded-2xl p-6 text-center hover:border-zinc-700 cursor-pointer bg-[#0f0f11]">
+                <div class="text-sm font-medium">Drop student photos here or click</div>
+                <div class="text-xs text-zinc-500">PNG / JPG → <span class="font-mono">student_images/</span></div>
+                <input id="student-file-input" type="file" multiple accept="image/*" class="hidden">
+                <div id="student-upload-list" class="mt-2 text-xs font-mono text-zinc-500"></div>
+              </div>
+              <div id="student-preview" class="mt-3 grid grid-cols-6 gap-2"></div>
+              <div id="pairing-info" class="mt-2 text-xs font-mono text-zinc-500"></div>
+            </div>
+          </div>
+          <!-- Options -->
+          <div class="mt-5 grid sm:grid-cols-2 gap-3">
+            <label class="card-soft rounded-xl px-4 py-3 flex items-center gap-3 cursor-pointer">
+              <input id="opt-enhance" type="checkbox" class="accent-[#7c3aed]">
+              <div><div class="text-sm font-medium">Enhance photo</div><div class="text-xs text-zinc-500">Upscale, denoise, sharpen</div></div>
+            </label>
+            <div class="card-soft rounded-xl px-4 py-3">
+              <div class="text-xs text-zinc-500">Template</div>
+              <select id="work-template-select" class="mt-1 w-full bg-[#0a0a0c] border border-[#1f1f23] rounded-lg px-2 py-1.5 text-sm"><option value="">Default (active)</option></select>
+            </div>
+          </div>
+          <div class="mt-4 flex gap-2">
+            <button id="btn-start" class="flex-1 btn-accent rounded-full py-3 text-sm font-medium">Start Processing</button>
+            <button id="btn-stop" class="px-6 rounded-full border border-[#1f1f23] bg-[#111113] text-sm hidden">Stop</button>
+          </div>
+          <div id="progress-wrap" class="mt-4 hidden">
+            <div class="flex justify-between text-xs font-mono text-zinc-500"><span id="progress-text">0 / 0</span><span id="progress-pct">0%</span></div>
+            <div class="mt-2 h-1.5 bg-[#1a1a1e] rounded-full"><div id="progress-bar" class="h-full bg-[#7c3aed] rounded-full transition-all" style="width:0%"></div></div>
+          </div>
+          <div class="mt-4">
+            <div class="flex items-center justify-between"><span class="text-sm font-medium">Live log</span><button id="btn-clear-log" class="text-xs text-zinc-500">Clear</button></div>
+            <pre id="live-log" class="mt-2 bg-[#0a0a0c] border border-[#1f1f23] rounded-xl p-4 h-[220px] overflow-auto text-xs font-mono text-zinc-400"></pre>
+          </div>
+          <div class="mt-3 flex items-center gap-2 text-xs">
+            <span id="process-status" class="px-2.5 py-1 rounded-full bg-zinc-900 border border-[#1f1f23] text-zinc-400">idle</span>
+            <span id="process-time" class="font-mono text-zinc-500">—</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section data-section="settings" class="mt-6 hidden space-y-4">
+        <div class="card rounded-2xl p-5">
+          <h3 class="text-sm font-semibold">API Keys — CRUD</h3>
+          <p class="text-xs text-zinc-500 mt-1">Stored in <span class="font-mono">config/app_config.json</span> • masked display • set active per provider</p>
+          <div class="mt-4 grid lg:grid-cols-[140px_1fr_1.5fr] gap-3">
+            <select id="key-provider" class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm">
+              <option value="gemini">Gemini</option><option value="groq">Groq</option><option value="openai">OpenAI</option><option value="custom">Custom</option>
+            </select>
+            <input id="key-label" placeholder="Label — e.g. Personal" class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm">
+            <div class="flex gap-2">
+              <div class="flex-1 relative">
+                <input id="key-value" type="password" placeholder="Paste key (AIza / gsk_ / sk-)" class="w-full bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm pr-14">
+                <button id="toggle-key" class="absolute right-1 top-1 bottom-1 px-3 text-xs text-zinc-500">Show</button>
+              </div>
+              <button id="btn-add-key" class="btn-accent px-5 rounded-xl text-sm font-medium">Add</button>
+            </div>
+          </div>
+          <div id="key-msg" class="mt-2 text-xs min-h-[16px]"></div>
+          <div class="mt-4 flex gap-1.5">
+            <button data-filter="all" class="filter-btn bg-white text-black px-3 py-1 rounded-full text-xs font-medium">All</button>
+            <button data-filter="gemini" class="filter-btn px-3 py-1 rounded-full border border-[#1f1f23] bg-[#0a0a0c] text-xs">Gemini</button>
+            <button data-filter="groq" class="filter-btn px-3 py-1 rounded-full border border-[#1f1f23] bg-[#0a0a0c] text-xs">Groq</button>
+          </div>
+          <div id="keys-grid" class="mt-4 space-y-2"></div>
+          <div id="keys-empty" class="hidden text-center py-8 text-sm text-zinc-500">No keys yet</div>
+        </div>
+        <div class="card rounded-2xl p-5">
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-semibold">Models — CRUD</h3>
+            <div class="flex gap-1 p-1 bg-[#0a0a0c] border border-[#1f1f23] rounded-full">
+              <button data-mtab="gemini" class="mtab bg-white text-black px-3 py-1 rounded-full text-xs font-medium">Gemini</button>
+              <button data-mtab="groq" class="mtab px-3 py-1 rounded-full text-xs text-zinc-500">Groq</button>
+            </div>
+          </div>
+          <div class="mt-3 flex items-center gap-3 bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-4 py-3">
+            <span class="text-[11px] tracking-widest font-semibold text-zinc-500">LAST USED</span>
+            <span id="last-used-badge" class="font-mono text-sm font-medium">—</span>
+            <span class="ml-auto text-xs px-2 py-1 rounded-full bg-[#7c3aed] text-white" id="last-used-provider">gemini</span>
+            <button id="btn-fetch-live" class="ml-2 text-xs border border-[#1f1f23] bg-[#111113] rounded-full px-3 py-1 hover:bg-[#1a1a1e]">↻ Fetch live</button>
+          </div>
+          <div class="mt-3 flex gap-2">
+            <input id="custom-model-input" placeholder="Custom model — e.g. gemini-2.5-flash or qwen/qwen3-32b" class="flex-1 bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm">
+            <button id="btn-add-custom" class="btn-accent px-4 rounded-xl text-sm">Add Custom</button>
+          </div>
+          <div id="models-grid" class="mt-4 grid sm:grid-cols-2 gap-2"></div>
+          <div id="models-live" class="mt-4 hidden"><div class="text-xs font-semibold text-zinc-500">Live from API</div><div id="live-grid" class="grid sm:grid-cols-2 gap-2 mt-2"></div></div>
+        </div>
+      </section>
+
+      <!-- ============ PDF MAKER ============ -->
+      <section data-section="pdf" class="mt-6 hidden space-y-4">
+        <div class="card rounded-2xl p-5">
+          <h3 class="text-sm font-semibold">PDF Maker</h3>
+          <p class="text-xs text-zinc-500 mt-1">Combine rendered cards into A4 PDF • shows previous and current PDFs</p>
+          <div class="mt-4 grid sm:grid-cols-4 gap-3">
+            <label class="flex items-center gap-2 bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm">
+              <input id="pdf-enhance" type="checkbox" class="accent-[#7c3aed]"> Enhance
+            </label>
+            <label class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm flex items-center gap-2">Cols <input id="pdf-cols" type="number" value="5" min="1" max="10" class="ml-auto w-14 bg-[#111113] border border-[#1f1f23] rounded-lg px-2 py-1 text-sm"></label>
+            <label class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm flex items-center gap-2">Rows <input id="pdf-rows" type="number" value="2" min="1" max="10" class="ml-auto w-14 bg-[#111113] border border-[#1f1f23] rounded-lg px-2 py-1 text-sm"></label>
+            <input id="pdf-output" value="output.pdf" class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm" placeholder="output.pdf">
+          </div>
+          <button id="btn-make-pdf" class="mt-4 w-full btn-accent rounded-full py-3 text-sm font-medium">Make PDF</button>
+          <div id="pdf-msg" class="mt-2 text-xs min-h-[16px]"></div>
+        </div>
+        <div class="card rounded-2xl p-5">
+          <div class="flex items-center justify-between"><h3 class="text-sm font-semibold">PDFs — Previous & Current</h3><span class="text-xs font-mono text-zinc-500" id="pdf-count">—</span></div>
+          <div id="pdf-grid" class="mt-4 space-y-2"></div>
+        </div>
+      </section>
+
+      <div class="text-center text-xs text-zinc-600 mt-8">CardForge • Cleaner build • Gemini 20/day • Groq 1K OTPM</div>
+    </div>
+  </main>
+</div>
+
+<!-- Switch History Modal -->
+<div id="switch-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" onclick="closeSwitchModal()"></div>
+  <div class="relative card rounded-2xl p-6 w-full max-w-md">
+    <h3 class="font-semibold">Switch work?</h3>
+    <p class="text-sm text-zinc-500 mt-1">Save current work before switching?</p>
+    <div class="mt-4">
+      <label class="flex items-center gap-2 text-sm"><input id="switch-save-check" type="checkbox" checked class="accent-[#7c3aed]"> Save current work</label>
+      <input id="switch-save-name" placeholder="Archive name for current" class="mt-2 w-full bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-3 py-2.5 text-sm">
+    </div>
+    <div class="mt-4 flex gap-2">
+      <button onclick="closeSwitchModal()" class="flex-1 btn-ghost rounded-full py-2.5 text-sm">Cancel</button>
+      <button id="btn-confirm-switch" class="flex-1 btn-accent rounded-full py-2.5 text-sm">Switch</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+setInterval(()=>{ const el=$('#clock'); if(el) el.textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) },1000);
+let current='dashboard';
+const titles={dashboard:['Dashboard','Actual last used model, keys and work overview'], templates:['Templates','Past templates • last used is active by default'], editor:['Editor','All cards • edit in full editor'], history:['History','Save / wrap-up current work, switch back'], work:['Work','Completed / retry / left + start processing'], settings:['Settings','CRUD for models and API keys'], pdf:['PDF Maker','Previous and current PDFs']}
+function switchNav(name){
+  current=name;
+  $$('[data-section]').forEach(e=>e.classList.toggle('hidden', e.dataset.section!==name));
+  $$('.nav-btn').forEach(b=>{
+    const on=b.dataset.nav===name; b.classList.toggle('nav-active',on);
+    b.classList.toggle('text-zinc-400',!on); b.classList.toggle('text-white',on);
+  });
+  $('#page-title').textContent=titles[name]?.[0]||name;
+  $('#page-sub').textContent=titles[name]?.[1]||'';
+  if(innerWidth<1024) window.scrollTo({top:0,behavior:'smooth'});
+  if(name==='templates') refreshTemplates();
+  if(name==='editor') refreshEditor();
+  if(name==='history') refreshHistory();
+  if(name==='work') refreshWork();
+  if(name==='settings') {refreshKeys(); refreshModels();}
+  if(name==='pdf') refreshPdfs();
+  if(name==='dashboard') refreshStats();
+}
+$$('[data-nav]').forEach(b=>b.addEventListener('click',()=>switchNav(b.dataset.nav)));
+const mobileNav=$('#mobile-nav');
+if(mobileNav){ Object.keys(titles).forEach(n=>{
+  const b=document.createElement('button'); b.textContent=n[0].toUpperCase(); b.title=n;
+  b.className='w-8 h-8 rounded-full bg-[#1a1a1e] border border-[#1f1f23] text-xs shrink-0';
+  b.onclick=()=>switchNav(n); mobileNav.appendChild(b);
+});}
+async function api(path, opts={}){
+  const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opts});
+  const j=await r.json().catch(()=>({})); if(!r.ok) throw new Error(j.error||r.statusText); return j;
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
+async function refreshStats(){
+  try{
+    const s=await api('/api/stats');
+    $('#stat-cards').textContent=s.cards; $('#stat-templates').textContent=s.templates; $('#stat-pdfs').textContent=s.pdfs; $('#stat-history').textContent=s.history;
+    $('#dash-pending').textContent=s.images_pending; $('#dash-completed').textContent=s.completed; $('#dash-retry').textContent=s.retry;
+    $('#badge-pending').textContent=s.images_pending; $('#badge-pending').classList.toggle('hidden',!s.images_pending);
+    const cfg=await api('/api/config');
+    $('#dash-gemini-model').textContent=cfg.models?.gemini?.last_used||'—';
+    $('#dash-groq-model').textContent=cfg.models?.groq?.last_used||'—';
+    // dash keys
+    const keys=cfg.keys||[]; const active=cfg.active||{};
+    const dashKeys=$('#dash-keys');
+    if(!keys.length){ dashKeys.innerHTML='<div class="text-xs text-zinc-500">No keys — add in Settings</div>'; $('#dash-keys-count').textContent='0 keys'; }
+    else {
+      dashKeys.innerHTML=keys.slice(0,3).map(k=>{
+        const on=active[k.provider]===k.id;
+        return `<div class="flex items-center gap-2 bg-[#0a0a0c] border ${on?'border-[#7c3aed]/40':'border-[#1f1f23]'} rounded-xl px-3 py-2"><span class="w-7 h-7 rounded-lg ${k.provider==='gemini'?'bg-[#7c3aed]':'bg-zinc-800'} flex items-center justify-center text-white text-xs font-bold">${k.provider[0].toUpperCase()}</span><div class="min-w-0 flex-1"><div class="text-xs font-medium truncate">${esc(k.label)} ${on?'• active':''}</div><div class="text-[11px] font-mono text-zinc-500 truncate">${k.provider} • ${k.masked}</div></div></div>`;
+      }).join('');
+      $('#dash-keys-count').textContent=keys.length+' keys • '+(active.gemini?'Gemini active':'no Gemini')+' • '+(active.groq?'Groq active':'no Groq');
+    }
+    // history/work pending also update
+    $('#hist-pending').textContent=s.images_pending; $('#hist-completed').textContent=s.completed; $('#hist-cards').textContent=s.cards;
+  }catch(e){}
+  try{
+    const st=await api('/api/process/status');
+    $('#recent-log').innerHTML=(st.log_tail||[]).slice(-10).map(l=>`<div class="truncate">${esc(l)}</div>`).join('') || '<div class="text-zinc-600">No recent logs</div>';
+  }catch(e){}
+}
+setInterval(refreshStats,3000); refreshStats();
+
+// Templates
+async function refreshTemplates(){
+  try{
+    const d=await api('/api/templates');
+    const active=d.active;
+    $('#active-template-badge').textContent=active? 'active: '+active : 'no active';
+    $('#active-template-badge').classList.toggle('hidden',!active);
+    const grid=$('#templates-grid');
+    // also fill work template select
+    const sel=$('#work-template-select');
+    if(sel){ sel.innerHTML='<option value="">Default (active)</option>' + d.templates.map(t=>`<option value="${esc(t.name)}" ${t.name===active?'selected':''}>${esc(t.name)} ${t.name===active?'• active':''}</option>`).join(''); }
+    grid.innerHTML=d.templates.map(t=>{
+      const isActive=t.name===active;
+      return `<div class="bg-[#0a0a0c] border ${isActive?'border-[#7c3aed]':'border-[#1f1f23]'} rounded-xl p-3">
+        <img src="/media/${t.template_file}" class="w-full rounded-lg aspect-[3/1] object-cover bg-[#111113]">
+        <div class="mt-2 flex items-center justify-between">
+          <span class="font-mono text-xs">${esc(t.name)}</span>
+          ${isActive?'<span class="text-[11px] bg-[#7c3aed] text-white px-2 py-0.5 rounded-full">LAST USED</span>':`<button onclick="activateTemplate('${t.name}')" class="text-xs px-2 py-1 rounded-full border border-[#1f1f23] hover:bg-[#1a1a1e]">Set Active</button>`}
+        </div>
+        <div class="mt-2 flex gap-1">
+          <a href="/designer?template=${t.name}" target="_blank" class="flex-1 text-center text-xs border border-[#1f1f23] rounded-full py-1.5 hover:bg-[#1a1a1e]">Edit</a>
+        </div>
+      </div>`;
+    }).join('') || '<div class="text-sm text-zinc-500">No templates yet — upload above</div>';
+  }catch(e){}
+}
+async function activateTemplate(name){ await api('/api/templates/activate',{method:'POST',body:JSON.stringify({name})}); await refreshTemplates(); await refreshStats(); }
+$('#template-input').onchange=async()=>{
+  const f=$('#template-input').files[0]; if(!f) return;
+  const fd=new FormData(); fd.append('template',f);
+  const r=await fetch('/api/upload/template',{method:'POST',body:fd}); const j=await r.json();
+  if(j.ok) refreshTemplates(); else alert(j.error);
+};
+
+// Editor
+let editorFilter='';
+$('#editor-search').addEventListener('input',e=>{ editorFilter=e.target.value.toLowerCase(); refreshEditor(); });
+async function refreshEditor(){
+  try{
+    const recs=await api('/api/records');
+    $('#editor-count').textContent=recs.length;
+    let filtered=recs; if(editorFilter) filtered=recs.filter(r=> (r.student_name||r.name).toLowerCase().includes(editorFilter));
+    const grid=$('#editor-grid');
+    grid.innerHTML=filtered.slice(0,60).map(r=>`<div class="bg-[#0a0a0c] border border-[#1f1f23] rounded-xl overflow-hidden">
+      <img src="${r.output_url}" class="w-full aspect-[4/3] object-cover bg-[#111113]">
+      <div class="p-3">
+        <div class="text-sm font-medium truncate">${esc(r.student_name||r.name)}</div>
+        <div class="text-xs font-mono text-zinc-500 truncate">${esc(r.name)}</div>
+        <a href="/editor" target="_blank" class="mt-2 block text-center text-xs border border-[#1f1f23] rounded-full py-1.5 hover:bg-[#1a1a1e]">Edit in Editor</a>
+      </div>
+    </div>`).join('') || '<div class="text-sm text-zinc-500">No cards yet — process Work first</div>';
+  }catch(e){}
+}
+
+// History
+async function refreshHistory(){
+  try{
+    const items=await api('/api/history');
+    $('#history-count').textContent=items.length+' archives';
+    const grid=$('#history-grid');
+    grid.innerHTML=items.map(it=>{
+      const d=new Date(it.mtime*1000).toLocaleString();
+      const mb=(it.size/1024/1024).toFixed(1);
+      return `<div class="flex items-center gap-3 bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-4 py-3">
+        <div class="w-9 h-9 rounded-lg bg-zinc-900 border border-[#1f1f23] flex items-center justify-center text-sm">◷</div>
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-medium truncate">${esc(it.name)}</div>
+          <div class="text-xs font-mono text-zinc-500">${d} • ${mb} MB</div>
+        </div>
+        <div class="flex gap-1.5">
+          <button onclick="requestRestore('${it.name}')" class="text-xs px-3 py-1.5 rounded-full bg-white text-black font-medium">Restore</button>
+          <a href="/media/history/${it.file}" class="text-xs px-3 py-1.5 rounded-full border border-[#1f1f23] hover:bg-[#1a1a1e]">Download</a>
+          <button onclick="deleteHistory('${it.name}')" class="w-7 h-7 rounded-full hover:bg-zinc-900 text-zinc-500">✕</button>
+        </div>
+      </div>`;
+    }).join('') || '<div class="text-sm text-zinc-500">No history — wrap-up current work to create first archive</div>';
+  }catch(e){}
+}
+$('#btn-wrapup').onclick=async()=>{
+  const name=$('#wrapup-name').value.trim();
+  if(!name) return alert('Enter archive name');
+  if(!confirm('Save current work as "'+name+'"? This will zip image, student_images, output, completed, retry, temp, templates, pdf to history/'+name+'.zip and CLEAR them. Config/history are kept. Continue?')) return;
+  try{
+    const res = await api('/api/history/archive',{method:'POST',body:JSON.stringify({name})});
+    $('#wrapup-name').value='';
+    await Promise.all([refreshHistory(), refreshStats(), refreshWork(), refreshEditor(), refreshPdfs(), refreshTemplates()]);
+    alert('✓ Saved and cleared: '+name+' — workspace is now empty (image:0, completed:0, cards:0, pdf: archived). Check Work tab.');
+  }catch(e){ alert('Wrap-up failed: '+e.message); }
+};
+let pendingRestore=null;
+function requestRestore(name){
+  pendingRestore=name;
+  $('#switch-save-name').value='before-'+name+'-'+new Date().toISOString().slice(0,10);
+  $('#switch-save-check').checked=true;
+  $('#switch-modal').classList.remove('hidden');
+}
+function closeSwitchModal(){ $('#switch-modal').classList.add('hidden'); pendingRestore=null; }
+$('#btn-confirm-switch').onclick=async()=>{
+  if(!pendingRestore) return;
+  const save_current=$('#switch-save-check').checked;
+  const save_name=$('#switch-save-name').value.trim();
+  try{
+    await api('/api/history/restore',{method:'POST',body:JSON.stringify({name:pendingRestore, save_current, save_name})});
+    closeSwitchModal(); await refreshHistory(); await refreshStats(); await refreshWork(); alert('Restored: '+pendingRestore);
+  }catch(e){ alert(e.message); }
+};
+async function deleteHistory(name){ if(!confirm('Delete '+name+'?')) return; await api('/api/history/delete?name='+encodeURIComponent(name),{method:'DELETE'}); refreshHistory(); }
+
+// Work
+async function refreshWork(){
+  try{
+    const w=await api('/api/work');
+    $('#work-pending-count').textContent=w.pending.length;
+    $('#work-completed-count').textContent=w.completed.length;
+    $('#work-retry-count').textContent=w.retry.length;
+    $('#student-count').textContent=w.student_pending.length+' student';
+    $('#work-student-hint').classList.toggle('hidden',!w.student_pending.length);
+    // pending list
+    $('#work-pending-list').innerHTML=w.pending.slice(0,30).map(f=>`<div class="flex justify-between"><span class="truncate">${esc(f.name)}</span><span class="text-zinc-600">${(f.size/1024).toFixed(0)}KB</span></div>`).join('') || '<div class="text-zinc-600">No pending forms</div>';
+    // completed thumbs
+    $('#work-completed-list').innerHTML=w.cards.slice(0,9).map(c=>`<img src="${c.url}" class="w-full aspect-[4/3] object-cover rounded-lg border border-[#1f1f23]">`).join('') || '<div class="text-xs text-zinc-500 col-span-3">No completed</div>';
+    // also show completed file names under?
+    // retry
+    $('#work-retry-list').innerHTML=w.retry.slice(0,20).map(f=>`<div class="truncate" title="${esc(f.path)}">${esc(f.name)}</div>`).join('') || '<div class="text-zinc-600">No retries</div>';
+    // forms preview
+    $('#work-forms-preview').innerHTML=w.pending.slice(0,12).map(f=>`<img src="${f.url}" class="w-full aspect-[3/4] object-cover rounded-lg border border-[#1f1f23]">`).join('');
+    $('#student-preview').innerHTML=w.student_pending.slice(0,12).map(f=>`<img src="${f.url}" class="w-full aspect-[3/4] object-cover rounded-lg border border-[#1f1f23]">`).join('');
+    if(w.pending.length && w.student_pending.length){
+      const n=Math.min(w.pending.length,w.student_pending.length);
+      $('#pairing-info').textContent=n+' pairs will be processed 1:1 by file order';
+    } else $('#pairing-info').textContent='';
+    await refreshTemplates(); // also update template select
+  }catch(e){}
+}
+// work upload
+const workDrop=$('#work-drop'), workInput=$('#work-file-input');
+if(workDrop){
+  workDrop.onclick=()=>workInput.click();
+  workDrop.ondragover=e=>{e.preventDefault(); workDrop.classList.add('border-zinc-600')};
+  workDrop.ondragleave=()=>workDrop.classList.remove('border-zinc-600');
+  workDrop.ondrop=e=>{e.preventDefault(); workDrop.classList.remove('border-zinc-600'); handleWorkFiles(e.dataTransfer.files,false)};
+  workInput.onchange=()=>handleWorkFiles(workInput.files,false);
+}
+const studentDrop=$('#student-drop'), studentInput=$('#student-file-input');
+if(studentDrop){
+  studentDrop.onclick=()=>studentInput.click();
+  studentDrop.ondragover=e=>{e.preventDefault(); studentDrop.classList.add('border-zinc-600')};
+  studentDrop.ondragleave=()=>studentDrop.classList.remove('border-zinc-600');
+  studentDrop.ondrop=e=>{e.preventDefault(); studentDrop.classList.remove('border-zinc-600'); handleWorkFiles(e.dataTransfer.files,true)};
+  studentInput.onchange=()=>handleWorkFiles(studentInput.files,true);
+}
+$('#opt-external').onchange=()=>{
+  const on=$('#opt-external').checked;
+  $('#student-section').classList.toggle('hidden',!on);
+};
+async function handleWorkFiles(files,isStudent){
+  if(!files.length) return;
+  const fd=new FormData();
+  for(const f of files) fd.append('images',f);
+  const url=isStudent? '/api/upload?folder=student' : '/api/upload';
+  // our /api/upload always saves to image/, for student we need custom endpoint — reuse but move files?
+  // For now if isStudent, upload to image then move via extra call? Simpler: add query to app.py to support student_images
+  // We'll call /api/upload and if isStudent, server will route based on header? Let's add ?target=student
+  const target=isStudent? '?target=student_images' : '';
+  $('#work-upload-list').textContent='Uploading…';
+  const r=await fetch('/api/upload'+target,{method:'POST',body:fd});
+  const j=await r.json();
+  const el=isStudent? $('#student-upload-list') : $('#work-upload-list');
+  el.textContent=j.ok ? 'Saved '+j.count : 'Error';
+  refreshWork(); refreshStats();
+}
+$('#btn-start').onclick=async()=>{
+  const enhance=$('#opt-enhance').checked, external=$('#opt-external').checked;
+  $('#btn-start').disabled=true; $('#btn-start').textContent='Starting…';
+  try{
+    await api('/api/process/start',{method:'POST',body:JSON.stringify({enhance_photo:enhance,external_student_image:external})});
+    $('#process-status').textContent='running'; $('#process-status').className='text-xs px-2.5 py-1 rounded-full bg-emerald-600 text-white';
+    $('#btn-stop').classList.remove('hidden'); pollLog();
+  }catch(e){ alert(e.message); $('#btn-start').disabled=false; $('#btn-start').textContent='Start Processing'; }
+};
+$('#btn-stop').onclick=async()=>{ await api('/api/process/stop',{method:'POST'}); };
+$('#btn-clear-log').onclick=()=>$('#live-log').textContent='';
+let pollTimer=null;
+async function pollLog(){
+  try{
+    const s=await api('/api/process/status');
+    const el=$('#live-log'); el.textContent=(s.log_tail||[]).join('\n'); el.scrollTop=el.scrollHeight;
+    const st=s.stats||{};
+    if(st.pending!==undefined){
+      $('#progress-wrap').classList.remove('hidden');
+      const total=(st.cards||0)+(st.pending||0); const done=st.cards||0; const pct= total? Math.round(done/total*100):0;
+      $('#progress-text').textContent=done+' / '+total; $('#progress-pct').textContent=pct+'%'; $('#progress-bar').style.width=pct+'%';
+    }
+    if(s.running){ $('#btn-start').disabled=true; $('#btn-start').textContent='Running…'; pollTimer=setTimeout(pollLog,1500); }
+    else { $('#btn-start').disabled=false; $('#btn-start').textContent='Start Processing'; $('#process-status').textContent=s.error?'error':'idle'; $('#process-status').className=s.error?'text-xs px-2.5 py-1 rounded-full bg-red-600 text-white':'text-xs px-2.5 py-1 rounded-full bg-zinc-900 border border-[#1f1f23] text-zinc-400'; $('#btn-stop').classList.add('hidden'); refreshWork(); refreshStats(); }
+  }catch(e){ pollTimer=setTimeout(pollLog,2000); }
+}
+
+// Settings — Keys + Models
+let keyFilter='all';
+$$('.filter-btn').forEach(b=>b.addEventListener('click',()=>{
+  keyFilter=b.dataset.filter;
+  $$('.filter-btn').forEach(x=>{x.classList.remove('bg-white','text-black'); x.classList.add('border','bg-[#0a0a0c]')});
+  b.classList.add('bg-white','text-black'); b.classList.remove('border','bg-[#0a0a0c]');
+  refreshKeys();
+}));
+async function refreshKeys(){
+  const cfg=await api('/api/config'); renderKeys(cfg);
+}
+function renderKeys(cfg){
+  const grid=$('#keys-grid'); if(!grid) return;
+  let keys=cfg.keys||[]; if(keyFilter!=='all') keys=keys.filter(k=>k.provider===keyFilter);
+  if(!keys.length){ grid.innerHTML=''; $('#keys-empty').classList.remove('hidden'); return; }
+  $('#keys-empty').classList.add('hidden');
+  const active=cfg.active||{};
+  grid.innerHTML=keys.map(k=>{
+    const on=active[k.provider]===k.id;
+    return `<div class="flex items-center gap-3 bg-[#0a0a0c] border ${on?'border-[#7c3aed]/40':'border-[#1f1f23]'} rounded-xl px-4 py-3">
+      <div class="w-9 h-9 rounded-lg ${k.provider==='gemini'?'bg-[#7c3aed]':'bg-zinc-800'} flex items-center justify-center text-white text-xs font-bold">${k.provider[0].toUpperCase()}</div>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-medium flex items-center gap-2">${esc(k.label)} ${on?'<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-600 text-white">ACTIVE</span>':''}</div>
+        <div class="text-xs font-mono text-zinc-500 truncate">${k.provider} • ${k.masked}</div>
+      </div>
+      <div class="hidden sm:block text-right"><div class="text-[11px] text-zinc-500 font-mono">${k.last_used? 'used '+new Date(k.last_used).toLocaleDateString() : 'never used'}</div><div class="text-[11px] text-zinc-600">${new Date(k.created_at).toLocaleDateString()}</div></div>
+      <div class="flex gap-1.5">
+        <button onclick="activateKey('${k.id}','${k.provider}')" class="text-xs px-3 py-1.5 rounded-full ${on?'bg-white text-black':'border border-[#1f1f23] hover:bg-[#1a1a1e]'}">${on?'Active':'Use'}</button>
+        <button onclick="testKey('${k.provider}')" class="text-xs px-3 py-1.5 rounded-full border border-[#1f1f23] hover:bg-[#1a1a1e]">Test</button>
+        <button onclick="deleteKey('${k.id}')" class="w-7 h-7 rounded-full hover:bg-zinc-900 text-zinc-500">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+$('#toggle-key').onclick=()=>{
+  const i=$('#key-value'); const on=i.type==='password';
+  i.type=on?'text':'password'; $('#toggle-key').textContent=on?'Hide':'Show';
+};
+$('#btn-add-key').onclick=async()=>{
+  const provider=$('#key-provider').value, label=$('#key-label').value, key=$('#key-value').value.trim();
+  const msg=$('#key-msg'); if(!key){ msg.textContent='Paste a key first'; msg.className='mt-2 text-xs text-amber-400'; return; }
+  msg.textContent='Saving…'; msg.className='mt-2 text-xs text-zinc-500';
+  try{ await api('/api/keys',{method:'POST',body:JSON.stringify({provider,label,key})}); msg.textContent='Added ✓'; msg.className='mt-2 text-xs text-emerald-400'; $('#key-value').value=''; $('#key-label').value=''; await refreshStats(); await refreshKeys(); }catch(e){ msg.textContent=e.message; msg.className='mt-2 text-xs text-red-400'; }
+};
+async function deleteKey(id){ if(!confirm('Delete?')) return; await api('/api/keys/'+id,{method:'DELETE'}); await refreshStats(); await refreshKeys(); }
+async function activateKey(id,provider){ await api('/api/keys/'+id+'/activate',{method:'POST',body:JSON.stringify({provider})}); await refreshStats(); await refreshKeys(); }
+async function testKey(provider){ try{ const r=await fetch('/api/keys/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider})}); const j=await r.json(); alert(j.ok ? '✓ '+j.message : '✗ '+(j.error||'failed')); }catch(e){ alert(e.message)} }
+
+let mtab='gemini';
+$$('.mtab').forEach(b=>b.addEventListener('click',()=>{
+  mtab=b.dataset.mtab;
+  $$('.mtab').forEach(x=>{x.classList.remove('bg-white','text-black'); x.classList.add('text-zinc-500')});
+  b.classList.add('bg-white','text-black'); b.classList.remove('text-zinc-500');
+  $('#last-used-provider').textContent=mtab; refreshModels();
+}));
+async function refreshModels(){
+  try{
+    const cfg=await api('/api/config');
+    const last=cfg.models?.[mtab]?.last_used||'—';
+    $('#last-used-badge').textContent=last;
+    const data=await api('/api/models?provider='+mtab);
+    const grid=$('#models-grid');
+    grid.innerHTML=data.known.map(m=>{
+      const isLast=m===last, isCustom=data.custom.includes(m);
+      return `<button onclick="selectModel('${m.replace(/'/g,"\\'")}')" class="text-left bg-[#0a0a0c] border ${isLast?'border-[#7c3aed]':'border-[#1f1f23] hover:border-[#2a2a30]'} rounded-xl px-4 py-3">
+        <div class="font-mono text-sm font-medium break-all">${esc(m)}</div>
+        <div class="mt-1 flex gap-2">${isLast?'<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-[#7c3aed] text-white">LAST USED</span>':''}${isCustom?'<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400">custom</span>':`<span class="text-xs text-zinc-500">${mtab}</span>`}</div>
+        ${isCustom?`<div class="mt-2" onclick="event.stopPropagation()"><span onclick="deleteCustom('${m.replace(/'/g,"\\'")}')" class="text-xs text-zinc-500 hover:text-red-400">Remove</span></div>`:''}
+      </button>`;
+    }).join('');
+  }catch(e){}
+}
+async function selectModel(m){ await api('/api/models/select',{method:'POST',body:JSON.stringify({provider:mtab,model:m})}); await refreshModels(); await refreshStats(); }
+$('#btn-add-custom').onclick=async()=>{
+  const v=$('#custom-model-input').value.trim(); if(!v) return;
+  await api('/api/models/custom',{method:'POST',body:JSON.stringify({provider:mtab,model:v})});
+  $('#custom-model-input').value=''; await refreshModels(); await refreshStats();
+};
+async function deleteCustom(m){ await fetch('/api/models/custom?provider='+mtab+'&model='+encodeURIComponent(m),{method:'DELETE'}); await refreshModels(); await refreshStats(); }
+$('#btn-fetch-live').onclick=async()=>{
+  const btn=$('#btn-fetch-live'); const t=btn.textContent; btn.textContent='Fetching…'; btn.disabled=true;
+  try{
+    const data=await api('/api/models/live?provider='+mtab);
+    $('#models-live').classList.remove('hidden');
+    $('#live-grid').innerHTML=data.models.map(x=>`<button onclick="selectModel('${x.id}')" class="text-left bg-[#0a0a0c] border border-[#1f1f23] hover:border-[#2a2a30] rounded-xl px-3 py-2.5 font-mono text-sm">${esc(x.id)}</button>`).join('');
+  }catch(e){ alert('Fetch failed: '+e.message); }
+  btn.textContent=t; btn.disabled=false;
+};
+
+// PDF
+async function deletePdf(name){
+  if(!confirm('Delete PDF "'+name+'"?')) return;
+  try{
+    await api('/api/pdf/delete?name='+encodeURIComponent(name),{method:'DELETE'});
+    await refreshPdfs(); await refreshStats();
+  }catch(e){ alert(e.message); }
+}
+async function refreshPdfs(){
+  try{
+    const pdfs=await api('/api/pdf/list');
+    $('#pdf-count').textContent=pdfs.length+' PDFs';
+    $('#pdf-grid').innerHTML=pdfs.map(p=>{
+      const d=new Date(p.mtime*1000).toLocaleString(); const mb=(p.size/1024/1024).toFixed(1);
+      return `<div class="flex items-center gap-3 bg-[#0a0a0c] border border-[#1f1f23] rounded-xl px-4 py-3">
+        <div class="w-9 h-9 rounded-lg bg-red-600/20 border border-red-600/30 flex items-center justify-center text-sm">▤</div>
+        <div class="min-w-0 flex-1"><div class="text-sm font-medium truncate">${esc(p.name)}</div><div class="text-xs font-mono text-zinc-500">${d} • ${mb} MB • ${esc(p.path)}</div></div>
+        <a href="${p.url}" target="_blank" class="text-xs px-3 py-1.5 rounded-full bg-white text-black font-medium">Open</a>
+        <a href="${p.url}" download class="text-xs px-3 py-1.5 rounded-full border border-[#1f1f23] hover:bg-[#1a1a1e]">Download</a>
+        <button onclick="deletePdf('${esc(p.name)}')" class="w-7 h-7 rounded-full hover:bg-red-900/30 flex items-center justify-center text-zinc-500 hover:text-red-400" title="Delete">✕</button>
+      </div>`;
+    }).join('') || '<div class="text-sm text-zinc-500">No PDFs yet — make one above (from output/cards)</div>';
+  }catch(e){}
+}
+$('#btn-make-pdf').onclick=async()=>{
+  const enhance=$('#pdf-enhance').checked, cols=parseInt($('#pdf-cols').value)||5, rows=parseInt($('#pdf-rows').value)||2, output=$('#pdf-output').value.trim()||'output.pdf';
+  $('#pdf-msg').textContent='Generating…'; $('#pdf-msg').className='mt-2 text-xs text-zinc-500';
+  try{
+    const r=await api('/api/pdf/make',{method:'POST',body:JSON.stringify({enhance,cols,rows,output})});
+    $('#pdf-msg').textContent='Done: '+r.output+' • '+r.images+' images → '+r.pages+' pages'; $('#pdf-msg').className='mt-2 text-xs text-emerald-400';
+    refreshPdfs(); refreshStats();
+  }catch(e){ $('#pdf-msg').textContent=e.message; $('#pdf-msg').className='mt-2 text-xs text-red-400'; }
+};
+
+// initial
+refreshStats(); refreshTemplates(); refreshWork();
+</script>
+</body>
+</html>
