@@ -9,5 +9,6 @@ image/*
 temp/*
 templates/*
 student_images/*
-output.pdf
+pdf/*
 history/*
+*/__pycache__/*
