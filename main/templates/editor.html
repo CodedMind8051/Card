@@ -55,10 +55,21 @@
             <button id="btn-rotate-r" class="btn icon" title="Rotate photo right">⟳</button>
             <label class="checkbox"><input type="checkbox" id="ctl-enhance"> Enhance photo</label>
           </div>
+          <div class="toolbar-group">
+            <button id="btn-add-image" class="btn" title="Stamp any image (logo, signature, seal) onto the card">+ Image</button>
+            <input type="file" id="image-file" accept="image/*" hidden>
+          </div>
           <div class="toolbar-group" id="text-controls" hidden>
             <label>Size <input type="number" id="ctl-font-size" min="8" max="300" style="width:60px"></label>
             <label>Color <input type="color" id="ctl-color"></label>
             <label class="checkbox"><input type="checkbox" id="ctl-bold"> Bold</label>
+          </div>
+          <div class="toolbar-group" id="image-controls" hidden>
+            <label>Rotate° <input type="number" id="ctl-img-rot" step="1" style="width:64px"></label>
+            <label>Opacity <input type="number" id="ctl-img-opacity" min="0" max="1" step="0.05" style="width:60px"></label>
+            <button id="btn-img-front" class="btn small" title="Bring to front">Front</button>
+            <button id="btn-img-back" class="btn small" title="Send to back">Back</button>
+            <button id="btn-img-delete" class="btn small" title="Remove image">✕</button>
           </div>
           <div class="toolbar-group right">
             <div class="zoom">
@@ -100,6 +111,14 @@
           <div class="reference-hint">Scroll on the photo to zoom in / out</div>
         </aside>
       </div>
+
+      <footer class="images-strip" id="images-strip" hidden>
+        <div class="images-head">
+          <span class="fields-title">Extra images</span>
+          <span class="images-hint">Click to select • drag / resize / rotate on the canvas • arrow keys nudge</span>
+        </div>
+        <div class="images-grid" id="images-grid"></div>
+      </footer>
 
       <footer class="fields-panel" id="fields-panel">
         <div class="fields-head">

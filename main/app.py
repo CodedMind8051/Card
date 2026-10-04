@@ -726,7 +726,7 @@ def _sanitize_layout(layout: dict) -> dict:
                 return float(v)
             except (TypeError, ValueError):
                 return v
-    out={"photo":{}, "texts":{}}
+    out={"photo":{}, "texts":{}, "images":[]}
     photo=layout.get("photo") or {}
     for key in ("x","y","width","height","corner_radius"):
         if key in photo:
@@ -740,6 +740,11 @@ def _sanitize_layout(layout: dict) -> dict:
             if k in s:
                 s[k]=num(s[k])
         out["texts"][key]=s
+    try:
+        from card_render import normalize_extra_images
+        out["images"]=normalize_extra_images(layout.get("images"))
+    except Exception:
+        out["images"]=layout.get("images") or []
     return out
 
 def _default_layout_for(w:int,h:int)->dict:
@@ -764,7 +769,41 @@ def _default_layout_for(w:int,h:int)->dict:
             spec["height"]=int(h*0.12)
         texts[fd["key"]]=spec
         y+=int(text_h*1.15)
-    return {"photo":{"x":int(w*0.08),"y":int(h*0.05),"width":int(w*0.26),"height":int(h*0.4),"corner_radius":20,"rotation":0},"texts":texts}
+    return {"photo":{"x":int(w*0.08),"y":int(h*0.05),"width":int(w*0.26),"height":int(h*0.4),"corner_radius":20,"rotation":0},"texts":texts,"images":[]}
+
+@app.route("/api/upload_overlay", methods=["POST"])
+def api_upload_overlay():
+    """Upload any image to stamp onto the card. Shared by designer + editor."""
+    f = request.files.get("image") or request.files.get("overlay")
+    if not f or not getattr(f, "filename", ""):
+        return jsonify({"error": "No image file uploaded"}), 400
+    from werkzeug.utils import secure_filename
+    overlay_dir = TEMP_DIR / "overlays"
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    fname = secure_filename(f.filename) or "overlay.png"
+    stem, suffix = (fname.rsplit(".", 1) + ["png"])[:2]
+    suffix = "." + suffix.lower().lstrip(".")
+    if suffix not in (".png", ".jpg", ".jpeg", ".webp"):
+        suffix = ".png"
+    dest = overlay_dir / f"{stem}{suffix}"
+    i = 1
+    while dest.exists():
+        dest = overlay_dir / f"{stem}_{i}{suffix}"
+        i += 1
+    try:
+        f.save(str(dest))
+    except Exception as e:
+        return jsonify({"error": f"Upload failed: {e}"}), 500
+    from PIL import Image as PILImage
+    try:
+        with PILImage.open(dest) as im:
+            w, h = im.size
+    except Exception:
+        dest.unlink(missing_ok=True)
+        return jsonify({"error": "Uploaded file is not a readable image"}), 400
+    rel = str(dest.relative_to(BASE_DIR))
+    return jsonify({"ok": True, "src": rel, "url": f"/media/{rel}", "width": w, "height": h})
+
 
 def _load_starting_state(name:str):
     cfg_path=TEMPLATES_DIR / f"{name}_design.json"
@@ -775,6 +814,8 @@ def _load_starting_state(name:str):
             layout=cfg.get("layout"); dummy=cfg.get("dummy_data")
         except Exception:
             pass
+    if isinstance(layout, dict) and not isinstance(layout.get("images"), list):
+        layout["images"] = []
     if layout is None:
         from PIL import Image
         with Image.open(TEMPLATES_DIR / f"{name}_template.png") as im:

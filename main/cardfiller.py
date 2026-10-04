@@ -53,7 +53,7 @@ NETWORK_ERROR_PATTERNS = [
 # gemini-2.5-flash-lite / 2.0-flash now 404 with google-genai 0.3.0; keep as fallback only.
 GEMINI_MODEL = "gemini-flash-latest"
 GEMINI_FALLBACK_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
-GEMINI_RPM = 5  # throttle to avoid 429 even though daily cap is the real limit
+GEMINI_RPM = 12  # throttle to avoid 429 even though daily cap is the real limit
 _GEMINI_MIN_INTERVAL = 60.0 / GEMINI_RPM + 1.0
 _last_gemini_call = 0.0
 _gemini_client = None
@@ -137,8 +137,8 @@ def wait_for_internet():
 
 PROMPT = (
     "Extract all information from this image and return ONLY a valid JSON object "
-    "with these keys: school_name, student_name, father_name, mother_name, class, "
-    "section, roll_number, mobile_number, dob, address, student_photo_bbox. "
+    "with these keys: student_name, father_name, mother_name, class, "
+    "section, roll_number, mobile_number, dob, address, blood_group,id_code, doj, school_name, designation, student_photo_bbox. "
     "For student_photo_bbox, return a list of 4 decimal numbers between 0.0 and 1.0 "
     "representing [x_ratio, y_ratio, width_ratio, height_ratio] relative to the "
     "total image width and height. Example: [0.15, 0.20, 0.10, 0.15]. "

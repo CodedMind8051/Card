@@ -15,7 +15,9 @@ let canvas = null;
 let canvasW = 0, canvasH = 0, displayScale = 1;
 let photoObj = null;
 let textObjs = {};        // key -> fabric.Textbox
+let imageObjs = {};       // overlay id -> fabric.Image
 let selectedKey = null;
+let selectedImageId = null;
 let syncing = false;      // guard against control->object feedback loops
 
 const FABRIC_CDN_OK = typeof fabric !== "undefined";
@@ -164,6 +166,11 @@ async function buildCanvas() {
   for (const key of Object.keys(state.layout.texts)) {
     addTextObj(key);
   }
+  if (!Array.isArray(state.layout.images)) state.layout.images = [];
+  for (const spec of state.layout.images) {
+    addImageObj(spec);
+  }
+  syncImagesList();
 
   canvas.on("selection:created", onSelectionChanged);
   canvas.on("selection:updated", onSelectionChanged);
@@ -171,14 +178,19 @@ async function buildCanvas() {
 
   canvas.on("object:moved", () => {
     if (canvas.getActiveObject() === photoObj) syncPhotoPanel();
+    else if (selectedImageId && imageObjs[selectedImageId]) syncImageEditPanel();
     else if (selectedKey && textObjs[selectedKey]) syncSelectedTextPanel();
   });
   canvas.on("object:scaling", () => {
     if (canvas.getActiveObject() === photoObj) syncPhotoPanel();
+    else if (selectedImageId && imageObjs[selectedImageId]) syncImageEditPanel();
+  });
+  canvas.on("object:rotating", () => {
+    if (selectedImageId && imageObjs[selectedImageId]) syncImageEditPanel();
   });
 
   canvas.requestRenderAll();
-  window.__designer = { canvas, textObjs, photoObj, get state() { return state; } };
+  window.__designer = { canvas, textObjs, imageObjs, photoObj, get state() { return state; } };
 }
 
 function selectedIsPhoto() { return canvas.getActiveObject() === photoObj; }
@@ -202,6 +214,8 @@ document.addEventListener("keydown", (e) => {
     state.layout.photo.x = Math.round(obj.left);
     state.layout.photo.y = Math.round(obj.top);
     syncPhotoPanel();
+  } else if (obj.name && obj.name.startsWith("extra:")) {
+    syncImageEditPanel();
   } else if (obj.name && obj.name.startsWith("field:")) {
     const k = obj.name.slice(6);
     if (state.layout.texts[k]) {
@@ -343,14 +357,27 @@ function onSelectionChanged() {
   if (obj === photoObj) {
     $("#photo-panel").hidden = false;
     $("#text-panel").hidden = true;
+    $("#image-edit-panel").hidden = true;
     selectedKey = null;
+    selectedImageId = null;
     syncPhotoPanel();
+    return;
+  }
+  if (obj.name && obj.name.startsWith("extra:")) {
+    selectedImageId = obj.name.slice(6);
+    selectedKey = null;
+    $("#photo-panel").hidden = true;
+    $("#text-panel").hidden = true;
+    $("#image-edit-panel").hidden = false;
+    syncImageEditPanel();
     return;
   }
   if (obj.name && obj.name.startsWith("field:")) {
     selectedKey = obj.name.slice(6);
+    selectedImageId = null;
     $("#photo-panel").hidden = true;
     $("#text-panel").hidden = false;
+    $("#image-edit-panel").hidden = true;
     syncSelectedTextPanel();
   }
 }
@@ -358,7 +385,10 @@ function onSelectionChanged() {
 function hidePanels() {
   $("#photo-panel").hidden = true;
   $("#text-panel").hidden = true;
+  const ie = $("#image-edit-panel");
+  if (ie) ie.hidden = true;
   selectedKey = null;
+  selectedImageId = null;
 }
 
 function syncPhotoPanel() {
@@ -628,6 +658,226 @@ $("#btn-add-field").addEventListener("click", () => {
 
 /* -------------------------------------------------------------- save --- */
 
+/* ------------------------------------------------- extra images ------- */
+
+function imageUrlFor(src) {
+  if (!src) return "";
+  if (/^(https?:|data:|blob:)/.test(src)) return src;
+  return "/media/" + String(src).replace(/^\/+/, "");
+}
+
+function specForImage(id) {
+  return (state.layout.images || []).find((s) => s.id === id);
+}
+
+function bakeImageObj(id, obj) {
+  const spec = specForImage(id);
+  if (!spec || !obj) return;
+  // Fold fabric scale into the stored box; keep rotation + opacity.
+  const natW = obj._natW || obj.width || 100;
+  const natH = obj._natH || obj.height || 100;
+  const sx = obj.scaleX || 1, sy = obj.scaleY || 1;
+  spec.width = Math.max(1, Math.round(natW * sx));
+  spec.height = Math.max(1, Math.round(natH * sy));
+  spec.x = Math.round(obj.left);
+  spec.y = Math.round(obj.top);
+  spec.rotation = Math.round(((obj.angle || 0) % 360 + 360) % 360);
+  spec.opacity = Math.max(0, Math.min(1, obj.opacity != null ? obj.opacity : 1));
+}
+
+function addImageObj(spec) {
+  if (!spec || !spec.src) return;
+  fabric.Image.fromURL(imageUrlFor(spec.src), (img) => {
+    if (!img) return;
+    img._natW = img.width;
+    img._natH = img.height;
+    const sx = (spec.width || img.width) / img.width;
+    const sy = (spec.height || img.height) / img.height;
+    img.set({
+      left: spec.x || 40, top: spec.y || 40,
+      scaleX: sx, scaleY: sy,
+      angle: spec.rotation || 0,
+      opacity: spec.opacity != null ? spec.opacity : 1,
+      visible: spec.enabled !== false,
+      hasRotatingPoint: true,
+      cornerColor: "#f0b455", cornerSize: 11, transparentCorners: false,
+      borderColor: "#f0b455", borderScaleFactor: 2,
+    });
+    img.setControlsVisibility({ mtr: true });
+    img.name = "extra:" + spec.id;
+    img.on("modified", () => { bakeImageObj(spec.id, img); syncImageEditPanel(); syncImagesList(); });
+    img.on("scaling", () => syncImageEditPanel());
+    img.on("moving", () => syncImageEditPanel());
+    img.on("rotating", () => syncImageEditPanel());
+    canvas.add(img);
+    canvas.bringToFront(img);
+    imageObjs[spec.id] = img;
+    canvas.setActiveObject(img);
+    onSelectionChanged();
+    canvas.requestRenderAll();
+  }, { crossOrigin: "anonymous" });
+}
+
+function syncImagesList() {
+  const list = $("#images-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const spec of (state.layout.images || [])) {
+    const row = document.createElement("div");
+    row.className = "img-row" + (spec.id === selectedImageId ? " active" : "");
+    row.innerHTML =
+      `<img src="${imageUrlFor(spec.src)}" alt="">` +
+      `<span class="img-name">${spec.label || spec.id}</span>`;
+    const del = document.createElement("button");
+    del.className = "btn small danger";
+    del.textContent = "✕";
+    del.title = "Remove image";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeImageById(spec.id);
+    });
+    row.appendChild(del);
+    row.addEventListener("click", () => {
+      const o = imageObjs[spec.id];
+      if (o) { canvas.setActiveObject(o); onSelectionChanged(); canvas.requestRenderAll(); }
+    });
+    list.appendChild(row);
+  }
+}
+
+function syncImageEditPanel() {
+  const id = selectedImageId;
+  const obj = id && imageObjs[id];
+  const spec = id && specForImage(id);
+  if (!obj || !spec || syncing) return;
+  syncing = true;
+  $("#image-label").textContent = spec.label || spec.id;
+  $("#image-x").value = Math.round(obj.left);
+  $("#image-y").value = Math.round(obj.top);
+  const natW = obj._natW || obj.width || 1;
+  const natH = obj._natH || obj.height || 1;
+  $("#image-w").value = Math.round(natW * (obj.scaleX || 1));
+  $("#image-h").value = Math.round(natH * (obj.scaleY || 1));
+  $("#image-rot").value = Math.round(obj.angle || 0);
+  $("#image-opacity").value = (obj.opacity != null ? obj.opacity : 1).toFixed(2);
+  $("#image-radius").value = spec.corner_radius || 0;
+  syncing = false;
+}
+
+function removeImageById(id) {
+  const o = imageObjs[id];
+  if (o) canvas.remove(o);
+  delete imageObjs[id];
+  state.layout.images = (state.layout.images || []).filter((s) => s.id !== id);
+  if (selectedImageId === id) { selectedImageId = null; $("#image-edit-panel").hidden = true; }
+  syncImagesList();
+  canvas.requestRenderAll();
+}
+
+$("#btn-add-image").addEventListener("click", () => $("#image-file").click());
+$("#image-file").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  const msg = $("#image-upload-msg");
+  msg.hidden = false;
+  msg.textContent = "Uploading “" + file.name + "”…";
+  const fd = new FormData();
+  fd.append("image", file);
+  let res;
+  try {
+    res = await fetch("/api/upload_overlay", { method: "POST", body: fd });
+  } catch (err) {
+    msg.textContent = "Upload failed (network).";
+    return;
+  }
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok || !out.src) {
+    msg.textContent = "Upload failed: " + (out.error || ("HTTP " + res.status));
+    return;
+  }
+  msg.textContent = "Placed “" + file.name + "” — drag / resize it on the canvas.";
+  const n = (state.layout.images || []).length + 1;
+  const maxW = 260;
+  const scale = Math.min(1, maxW / (out.width || maxW));
+  const spec = {
+    id: "img_" + Date.now().toString(36),
+    label: file.name.replace(/\.[^.]+$/, "") || ("Image " + n),
+    src: out.src,
+    x: 60, y: 60,
+    width: Math.max(1, Math.round((out.width || 200) * scale)),
+    height: Math.max(1, Math.round((out.height || 200) * scale)),
+    rotation: 0, opacity: 1, corner_radius: 0, enabled: true,
+  };
+  state.layout.images.push(spec);
+  addImageObj(spec);
+  syncImagesList();
+});
+
+function bindImageEditControls() {
+  const obj = () => selectedImageId && imageObjs[selectedImageId];
+  const spec = () => selectedImageId && specForImage(selectedImageId);
+  $("#image-x").addEventListener("input", (e) => {
+    const o = obj(); if (!o || syncing) return;
+    o.set("left", parseInt(e.target.value, 10) || 0);
+    bakeImageObj(selectedImageId, o); canvas.requestRenderAll();
+  });
+  $("#image-y").addEventListener("input", (e) => {
+    const o = obj(); if (!o || syncing) return;
+    o.set("top", parseInt(e.target.value, 10) || 0);
+    bakeImageObj(selectedImageId, o); canvas.requestRenderAll();
+  });
+  $("#image-w").addEventListener("input", (e) => {
+    const o = obj(); if (!o || syncing) return;
+    const natW = o._natW || o.width || 1;
+    o.set("scaleX", Math.max(0.01, (parseInt(e.target.value, 10) || 1) / natW));
+    bakeImageObj(selectedImageId, o); canvas.requestRenderAll();
+  });
+  $("#image-h").addEventListener("input", (e) => {
+    const o = obj(); if (!o || syncing) return;
+    const natH = o._natH || o.height || 1;
+    o.set("scaleY", Math.max(0.01, (parseInt(e.target.value, 10) || 1) / natH));
+    bakeImageObj(selectedImageId, o); canvas.requestRenderAll();
+  });
+  $("#image-rot").addEventListener("input", (e) => {
+    const o = obj(); if (!o || syncing) return;
+    o.set("angle", parseFloat(e.target.value) || 0);
+    bakeImageObj(selectedImageId, o); canvas.requestRenderAll();
+  });
+  $("#image-opacity").addEventListener("input", (e) => {
+    const o = obj(); if (!o || syncing) return;
+    let v = parseFloat(e.target.value);
+    if (isNaN(v)) v = 1;
+    o.set("opacity", Math.max(0, Math.min(1, v)));
+    bakeImageObj(selectedImageId, o); canvas.requestRenderAll();
+  });
+  $("#image-radius").addEventListener("input", (e) => {
+    const s = spec(); if (!s || syncing) return;
+    s.corner_radius = Math.max(0, parseInt(e.target.value, 10) || 0);
+  });
+  $("#btn-image-front").addEventListener("click", () => {
+    const o = obj(); if (!o) return;
+    canvas.bringToFront(o);
+    const s = spec();
+    state.layout.images = state.layout.images.filter((x) => x.id !== selectedImageId);
+    state.layout.images.push(s);
+    canvas.requestRenderAll();
+  });
+  $("#btn-image-back").addEventListener("click", () => {
+    const o = obj(); if (!o) return;
+    canvas.sendToBack(o);
+    if (photoObj) canvas.sendToBack(photoObj);
+    const s = spec();
+    state.layout.images = state.layout.images.filter((x) => x.id !== selectedImageId);
+    state.layout.images.unshift(s);
+    canvas.requestRenderAll();
+  });
+  $("#btn-image-remove").addEventListener("click", () => {
+    if (selectedImageId) removeImageById(selectedImageId);
+  });
+}
+bindImageEditControls();
+
 function collectLayout() {
   if (photoObj) {
     syncPhotoPanel(); // reflect typed values back
@@ -640,9 +890,13 @@ function collectLayout() {
   for (const key of Object.keys(textObjs)) {
     bakeTextObj(key, textObjs[key]);
   }
+  for (const id of Object.keys(imageObjs)) {
+    bakeImageObj(id, imageObjs[id]);
+  }
   const layout = {
     photo: { ...state.layout.photo },
     texts: {},
+    images: (state.layout.images || []).map((s) => ({ ...s })),
   };
   for (const key of Object.keys(textObjs)) {
     layout.texts[key] = { ...state.layout.texts[key] };

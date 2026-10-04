@@ -63,7 +63,7 @@ files = sorted(
         for f in os.listdir(INPUT_FOLDER)
         if f.lower().endswith((".png", ".jpg", ".jpeg"))
     ],
-    reverse=True,      # <-- Last image first
+    reverse=False,      # <-- Last image first
 )
 
 if not files:

@@ -58,6 +58,11 @@ FIELD_POSITIONS = {
     "roll_number":   (440, 1083),
     "mobile_number": (440, 1140),
     "address":       (440, 1177),
+    # "blood_group":   (440, 1233),
+    # "id_code":       (440, 1289),
+    # "doj":           (440, 1345),
+    # "school_name":   (440, 1401),
+    # "designation":    (440, 1457),
 }
 
 NAME_CENTER = (531, 784)      # fixedCard.py NAME_CENTER, drawn with anchor "mm"
@@ -88,9 +93,69 @@ def hex_to_rgb(h):
 
 # ---------------------------------------------------------------- layout ---
 
+def normalize_extra_images(images) -> list:
+    """Clean a list of extra-image overlay specs so render + UI stay in sync.
+
+    Each spec: {id, src, x, y, width, height, rotation, opacity,
+    corner_radius, enabled, label}. Missing numbers get safe defaults;
+    entries without a src are dropped.
+    """
+    out = []
+    if not isinstance(images, list):
+        return out
+    for i, spec in enumerate(images):
+        if not isinstance(spec, dict):
+            continue
+        src = str(spec.get("src") or "").strip()
+        if not src:
+            continue
+        try:
+            x = int(float(spec.get("x", 0)))
+        except (TypeError, ValueError):
+            x = 0
+        try:
+            y = int(float(spec.get("y", 0)))
+        except (TypeError, ValueError):
+            y = 0
+        try:
+            w = int(float(spec.get("width", 200)))
+        except (TypeError, ValueError):
+            w = 200
+        try:
+            h = int(float(spec.get("height", 200)))
+        except (TypeError, ValueError):
+            h = 200
+        try:
+            rotation = float(spec.get("rotation", 0) or 0)
+        except (TypeError, ValueError):
+            rotation = 0.0
+        try:
+            opacity = float(spec.get("opacity", 1.0))
+        except (TypeError, ValueError):
+            opacity = 1.0
+        opacity = max(0.0, min(1.0, opacity))
+        try:
+            radius = int(float(spec.get("corner_radius", 0) or 0))
+        except (TypeError, ValueError):
+            radius = 0
+        out.append({
+            "id": str(spec.get("id") or f"img_{i+1}"),
+            "label": str(spec.get("label") or spec.get("id") or f"Image {i+1}"),
+            "src": src,
+            "x": x, "y": y,
+            "width": max(1, w), "height": max(1, h),
+            "rotation": rotation,
+            "opacity": opacity,
+            "corner_radius": max(0, radius),
+            "enabled": bool(spec.get("enabled", True)),
+        })
+    return out
+
+
 def build_default_layout():
     """The original hard-coded positions/sizes/colours, as an editable dict."""
     layout = {
+        "images": [],
         "photo": {
             "x": PHOTO_BOX[0], "y": PHOTO_BOX[1],
             "width": PHOTO_BOX[2], "height": PHOTO_BOX[3],
@@ -143,6 +208,12 @@ def merge_layout(default, override):
     for section in ("photo",):
         if section in override and override[section]:
             result[section].update(override[section])
+    # Extra image overlays: the override list wins outright (ids make each
+    # entry self-contained, so positional merging would only corrupt order).
+    if "images" in (override or {}):
+        result["images"] = normalize_extra_images(override.get("images"))
+    if "images" not in result or not isinstance(result.get("images"), list):
+        result["images"] = []
     if "texts" in override:
         for key, val in override["texts"].items():
             if key in result["texts"]:
@@ -325,6 +396,66 @@ def add_rounded_corners(img: Image.Image, radius: int) -> Image.Image:
     mask_draw.rounded_rectangle([0, 0, img.size[0] - 1, img.size[1] - 1], radius=radius, fill=255)
     img.putalpha(mask)
     return img
+
+
+def resolve_overlay_path(src: str):
+    """Find an extra-image file on disk. `src` is stored relative to the
+    project root (e.g. temp/overlays/logo.png); absolute paths also work."""
+    if not src:
+        return None
+    for cand in (Path(src), Path.cwd() / src):
+        try:
+            if cand.exists() and cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def draw_extra_image(base: Image.Image, spec: dict) -> Image.Image:
+    """Paste one extra-image overlay onto `base` (RGB or RGBA) and return it.
+
+    The image is stretched to (width, height), given rounded corners +
+    opacity, rotated clockwise by `rotation` degrees around its centre, then
+    pasted so its centre lands on (x + width/2, y + height/2).
+    """
+    path = resolve_overlay_path(spec.get("src", ""))
+    if path is None:
+        return base
+    try:
+        ov = Image.open(path).convert("RGBA")
+    except Exception:
+        return base
+    try:
+        w = max(1, int(spec.get("width", ov.width)))
+        h = max(1, int(spec.get("height", ov.height)))
+    except (TypeError, ValueError):
+        w, h = ov.width, ov.height
+    if (ov.width, ov.height) != (w, h):
+        ov = ov.resize((w, h), Image.LANCZOS)
+    radius = int(spec.get("corner_radius", 0) or 0)
+    if radius > 0:
+        ov = add_rounded_corners(ov, radius=radius)
+    opacity = float(spec.get("opacity", 1.0))
+    opacity = max(0.0, min(1.0, opacity))
+    if opacity < 1.0:
+        r, g, b, a = ov.split()
+        a = a.point(lambda v: int(v * opacity))
+        ov = Image.merge("RGBA", (r, g, b, a))
+    rotation = float(spec.get("rotation", 0) or 0)
+    if rotation:
+        ov = ov.rotate(-rotation, expand=True, resample=Image.BICUBIC)
+    try:
+        x = int(spec.get("x", 0))
+        y = int(spec.get("y", 0))
+    except (TypeError, ValueError):
+        x, y = 0, 0
+    cx = x + w / 2 - ov.width / 2
+    cy = y + h / 2 - ov.height / 2
+    if base.mode != "RGBA":
+        base = base.convert("RGBA")
+    base.alpha_composite(ov, (int(round(cx)), int(round(cy))))
+    return base
 
 
 def load_cropped_photo(source_image_path, crop, rotation=0, enhance=False):
@@ -718,4 +849,13 @@ def render_card(data: dict, layout: dict, template_path=TEMPLATE_PATH, photo_sou
         val = str(data.get(key, "") or "")
         draw_text_box(draw, val, spec)
 
+    # Extra image overlays (logos, signatures, stamps...): drawn last so they
+    # sit on top of the template, photo and text, in list order.
+    for spec in normalize_extra_images(layout.get("images")):
+        if not spec.get("enabled", True):
+            continue
+        im = draw_extra_image(im, spec)
+
+    if im.mode == "RGBA":
+        im = im.convert("RGB")
     return im

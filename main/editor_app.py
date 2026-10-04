@@ -244,6 +244,40 @@ def api_upload_photo(name):
     return jsonify({"ok": True, "url": f"/media/{rel}", "width": width, "height": height})
 
 
+@app.route("/api/upload_overlay", methods=["POST"])
+def api_upload_overlay():
+    """Upload any image to stamp onto the card (logo, signature, seal...).
+
+    Saved under temp/overlays/ and referenced by layout.images[]. Returns
+    {src, url, width, height} for the canvas to place + resize freely."""
+    from werkzeug.utils import secure_filename
+    f = request.files.get("image") or request.files.get("overlay")
+    if not f or not getattr(f, "filename", ""):
+        abort(400, description="No image file was uploaded")
+    overlay_dir = TEMP_DIR / "overlays"
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    fname = secure_filename(f.filename) or "overlay.png"
+    stem, suffix = (fname.rsplit(".", 1) + ["png"])[:2]
+    suffix = "." + suffix.lower().lstrip(".")
+    if suffix not in (".png", ".jpg", ".jpeg", ".webp"):
+        suffix = ".png"
+    dest = overlay_dir / f"{stem}{suffix}"
+    i = 1
+    while dest.exists():
+        dest = overlay_dir / f"{stem}_{i}{suffix}"
+        i += 1
+    f.save(str(dest))
+    from PIL import Image as PILImage
+    try:
+        with PILImage.open(dest) as im:
+            w, h = im.size
+    except Exception:
+        dest.unlink(missing_ok=True)
+        abort(400, description="Uploaded file is not a readable image")
+    rel = str(dest.relative_to(BASE_DIR))
+    return jsonify({"ok": True, "src": rel, "url": f"/media/{rel}", "width": w, "height": h})
+
+
 @app.route("/api/delete/<name>", methods=["POST"])
 def api_delete(name):
     deleted = []

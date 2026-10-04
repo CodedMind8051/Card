@@ -25,6 +25,8 @@ let currentData = null;
 let sourceSize = null;
 let photoObj = null;
 let textObjs = {};   // fieldKey -> fabric.Textbox
+let imageObjs = {};  // overlay id -> fabric.Image
+let selectedImageId = null;
 let movedKeys = new Set();  // text keys the user has dragged/scaled
 let fontBase = {};   // fieldKey -> base font size used for saving (updated on manual size change / scale)
 let cropper = null;
@@ -174,6 +176,8 @@ async function deleteCard(name) {
     currentData = null;
     photoObj = null;
     textObjs = {};
+    imageObjs = {};
+    selectedImageId = null;
     $("#editor").hidden = true;
     $("#empty-state").hidden = false;
   }
@@ -329,9 +333,119 @@ function setZoom(s) {
   applyZoom();
 }
 
+function imageUrlFor(src) {
+  if (!src) return "";
+  if (/^(https?:|data:|blob:)/.test(src)) return src;
+  return "/media/" + String(src).replace(/^\/+/, "");
+}
+
+function specForImage(id) {
+  return ((currentLayout && currentLayout.images) || []).find((s) => s.id === id);
+}
+
+function bakeImageObj(id, obj) {
+  const spec = specForImage(id);
+  if (!spec || !obj) return;
+  const natW = obj._natW || obj.width || 100;
+  const natH = obj._natH || obj.height || 100;
+  spec.width = Math.max(1, Math.round(natW * (obj.scaleX || 1)));
+  spec.height = Math.max(1, Math.round(natH * (obj.scaleY || 1)));
+  spec.x = Math.round(obj.left);
+  spec.y = Math.round(obj.top);
+  spec.rotation = Math.round(((obj.angle || 0) % 360 + 360) % 360);
+  spec.opacity = Math.max(0, Math.min(1, obj.opacity != null ? obj.opacity : 1));
+}
+
+function addImageObj(spec, opts) {
+  opts = opts || {};
+  if (!spec || !spec.src) return;
+  loadImage(imageUrlFor(spec.src)).then((img) => {
+    img._natW = img.width;
+    img._natH = img.height;
+    img.set({
+      left: spec.x != null ? spec.x : 60,
+      top: spec.y != null ? spec.y : 60,
+      scaleX: (spec.width || img.width) / img.width,
+      scaleY: (spec.height || img.height) / img.height,
+      angle: spec.rotation || 0,
+      opacity: spec.opacity != null ? spec.opacity : 1,
+      visible: spec.enabled !== false,
+      hasRotatingPoint: true,
+      cornerColor: "#f0b455", cornerSize: 12, transparentCorners: false,
+      borderColor: "#f0b455", borderScaleFactor: 2,
+    });
+    img.setControlsVisibility({ mtr: true });
+    img.imageId = spec.id;
+    img.on("modified", () => { bakeImageObj(spec.id, img); renderImagesStrip(); });
+    img.on("moving", () => { if (selectedImageId === spec.id) syncImageControls(); });
+    img.on("scaling", () => { if (selectedImageId === spec.id) syncImageControls(); });
+    img.on("rotating", () => { if (selectedImageId === spec.id) syncImageControls(); });
+    canvas.add(img);
+    canvas.bringToFront(img);
+    imageObjs[spec.id] = img;
+    renderImagesStrip();
+    if (opts.select !== false) {
+      canvas.setActiveObject(img);
+      onSelectionChanged();
+    }
+    canvas.requestRenderAll();
+  }).catch((err) => console.error("Could not load overlay image:", spec.src, err));
+}
+
+function renderImagesStrip() {
+  const strip = $("#images-strip");
+  const grid = $("#images-grid");
+  if (!strip || !grid) return;
+  const imgs = (currentLayout && currentLayout.images) || [];
+  strip.hidden = imgs.length === 0;
+  grid.innerHTML = "";
+  for (const spec of imgs) {
+    const chip = document.createElement("div");
+    chip.className = "img-chip" + (spec.id === selectedImageId ? " active" : "");
+    chip.innerHTML = `<img src="${imageUrlFor(spec.src)}" alt=""><span>${spec.label || spec.id}</span>`;
+    const del = document.createElement("button");
+    del.textContent = "✕";
+    del.title = "Remove image";
+    del.addEventListener("click", (e) => { e.stopPropagation(); removeImageById(spec.id); });
+    chip.appendChild(del);
+    chip.addEventListener("click", () => {
+      const o = imageObjs[spec.id];
+      if (o) { canvas.setActiveObject(o); onSelectionChanged(); canvas.requestRenderAll(); }
+    });
+    grid.appendChild(chip);
+  }
+}
+
+function removeImageById(id) {
+  const o = imageObjs[id];
+  if (o) canvas.remove(o);
+  delete imageObjs[id];
+  if (currentLayout && Array.isArray(currentLayout.images)) {
+    currentLayout.images = currentLayout.images.filter((s) => s.id !== id);
+  }
+  if (selectedImageId === id) {
+    selectedImageId = null;
+    const ic = $("#image-controls");
+    if (ic) ic.hidden = true;
+  }
+  renderImagesStrip();
+  if (canvas) canvas.requestRenderAll();
+}
+
+function syncImageControls() {
+  const o = selectedImageId && imageObjs[selectedImageId];
+  if (!o) return;
+  const rot = $("#ctl-img-rot");
+  const op = $("#ctl-img-opacity");
+  if (rot) rot.value = Math.round(o.angle || 0);
+  if (op) op.value = (o.opacity != null ? o.opacity : 1).toFixed(2);
+}
+
 async function buildCanvas(record) {
   if (canvas) { canvas.dispose(); canvas = null; }
   textObjs = {};
+  imageObjs = {};
+  selectedImageId = null;
   movedKeys = new Set();
   fontBase = {};
   photoObj = null;
@@ -400,9 +514,22 @@ async function buildCanvas(record) {
     }
   }
 
+  // ---- extra image overlays (logos, signatures, stamps) ----
+  if (!Array.isArray(currentLayout.images)) currentLayout.images = [];
+  for (const spec of currentLayout.images) {
+    addImageObj(spec, { select: false });
+  }
+  renderImagesStrip();
+
   canvas.on("selection:created", onSelectionChanged);
   canvas.on("selection:updated", onSelectionChanged);
-  canvas.on("selection:cleared", () => { $("#text-controls").hidden = true; });
+  canvas.on("selection:cleared", () => {
+    $("#text-controls").hidden = true;
+    const ic = $("#image-controls");
+    if (ic) ic.hidden = true;
+    selectedImageId = null;
+    renderImagesStrip();
+  });
 
   canvas.requestRenderAll();
 }
@@ -767,12 +894,101 @@ function syncFieldInputFromCanvas(key) {
 
 function onSelectionChanged(e) {
   const obj = canvas.getActiveObject();
-  if (!obj || !obj.fieldKey) { $("#text-controls").hidden = true; return; }
+  const ic = $("#image-controls");
+  if (obj && obj.imageId && imageObjs[obj.imageId]) {
+    selectedImageId = obj.imageId;
+    $("#text-controls").hidden = true;
+    if (ic) ic.hidden = false;
+    syncImageControls();
+    renderImagesStrip();
+    return;
+  }
+  selectedImageId = null;
+  if (ic) ic.hidden = true;
+  if (!obj || !obj.fieldKey) { $("#text-controls").hidden = true; renderImagesStrip(); return; }
   $("#text-controls").hidden = false;
   $("#ctl-font-size").value = Math.round(fontBase[obj.fieldKey] != null ? fontBase[obj.fieldKey] : obj.fontSize);
   $("#ctl-color").value = rgbToHex(obj.fill);
   $("#ctl-bold").checked = obj.fontWeight === "bold";
+  renderImagesStrip();
 }
+
+// ---- extra-image toolbar controls + upload ----
+$("#btn-add-image").addEventListener("click", () => $("#image-file").click());
+$("#image-file").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file || !currentLayout) return;
+  if (!currentName) { alert("Pick a card first, then add the image."); return; }
+  const fd = new FormData();
+  fd.append("image", file);
+  let res;
+  try {
+    res = await fetch("/api/upload_overlay", { method: "POST", body: fd });
+  } catch (err) {
+    alert("Image upload failed (network error).");
+    return;
+  }
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok || !out.src) {
+    alert("Image upload failed: " + (out.error || out.description || ("HTTP " + res.status)));
+    return;
+  }
+  const n = (currentLayout.images || []).length + 1;
+  const maxW = 260;
+  const scale = Math.min(1, maxW / (out.width || maxW));
+  const spec = {
+    id: "img_" + Date.now().toString(36),
+    label: (file.name || ("Image " + n)).replace(/\.[^.]+$/, ""),
+    src: out.src,
+    x: 60, y: 60,
+    width: Math.max(1, Math.round((out.width || 200) * scale)),
+    height: Math.max(1, Math.round((out.height || 200) * scale)),
+    rotation: 0, opacity: 1, corner_radius: 0, enabled: true,
+  };
+  currentLayout.images.push(spec);
+  addImageObj(spec);
+  const status = $("#save-status");
+  if (status) { status.textContent = "Image placed — drag / resize it, then Save."; status.classList.remove("ok"); }
+});
+$("#ctl-img-rot").addEventListener("input", (e) => {
+  const o = selectedImageId && imageObjs[selectedImageId];
+  if (!o) return;
+  o.set("angle", parseFloat(e.target.value) || 0);
+  bakeImageObj(selectedImageId, o);
+  canvas.requestRenderAll();
+});
+$("#ctl-img-opacity").addEventListener("input", (e) => {
+  const o = selectedImageId && imageObjs[selectedImageId];
+  if (!o) return;
+  let v = parseFloat(e.target.value);
+  if (isNaN(v)) v = 1;
+  o.set("opacity", Math.max(0, Math.min(1, v)));
+  bakeImageObj(selectedImageId, o);
+  canvas.requestRenderAll();
+});
+$("#btn-img-front").addEventListener("click", () => {
+  const o = selectedImageId && imageObjs[selectedImageId];
+  if (!o) return;
+  canvas.bringToFront(o);
+  const s = specForImage(selectedImageId);
+  currentLayout.images = currentLayout.images.filter((x) => x.id !== selectedImageId);
+  currentLayout.images.push(s);
+  canvas.requestRenderAll();
+});
+$("#btn-img-back").addEventListener("click", () => {
+  const o = selectedImageId && imageObjs[selectedImageId];
+  if (!o) return;
+  canvas.sendToBack(o);
+  if (photoObj) canvas.sendToBack(photoObj);
+  const s = specForImage(selectedImageId);
+  currentLayout.images = currentLayout.images.filter((x) => x.id !== selectedImageId);
+  currentLayout.images.unshift(s);
+  canvas.requestRenderAll();
+});
+$("#btn-img-delete").addEventListener("click", () => {
+  if (selectedImageId) removeImageById(selectedImageId);
+});
 
 $("#ctl-font-size").addEventListener("input", (e) => {
   const obj = canvas.getActiveObject();
@@ -1012,7 +1228,10 @@ document.addEventListener("keydown", (e) => {
 });
 
 function collectLayoutFromCanvas() {
-  const layout = { photo: { ...currentLayout.photo }, texts: {} };
+  for (const [id, o] of Object.entries(imageObjs)) {
+    bakeImageObj(id, o);
+  }
+  const layout = { photo: { ...currentLayout.photo }, texts: {}, images: (currentLayout.images || []).map((s) => ({ ...s })) };
 
   if (photoObj) {
     layout.photo.x = Math.round(photoObj.left);

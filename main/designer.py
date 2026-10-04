@@ -98,7 +98,7 @@ def sanitize_layout(layout: dict) -> dict:
             except (TypeError, ValueError):
                 return v
 
-    out = {"photo": {}, "texts": {}}
+    out = {"photo": {}, "texts": {}, "images": []}
     photo = layout.get("photo") or {}
     for key in ("x", "y", "width", "height", "corner_radius"):
         if key in photo:
@@ -113,7 +113,43 @@ def sanitize_layout(layout: dict) -> dict:
             if k in s:
                 s[k] = num(s[k])
         out["texts"][key] = s
+    try:
+        from card_render import normalize_extra_images
+        out["images"] = normalize_extra_images(layout.get("images"))
+    except Exception:
+        out["images"] = layout.get("images") or []
     return out
+
+
+OVERLAY_DIR = BASE_DIR / "temp" / "overlays"
+
+
+def save_overlay_upload(file_storage) -> dict:
+    """Store an uploaded extra-image overlay and return {src, url, w, h}."""
+    from werkzeug.utils import secure_filename
+    from PIL import Image as PILImage
+    OVERLAY_DIR.mkdir(parents=True, exist_ok=True)
+    fname = secure_filename(getattr(file_storage, "filename", "") or "overlay.png")
+    if not fname or "." not in fname:
+        fname = "overlay.png"
+    stem, suffix = fname.rsplit(".", 1)[0], "." + fname.rsplit(".", 1)[1]
+    suffix = suffix.lower()
+    if suffix not in (".png", ".jpg", ".jpeg", ".webp"):
+        suffix = ".png"
+    dest = OVERLAY_DIR / f"{stem}{suffix}"
+    i = 1
+    while dest.exists():
+        dest = OVERLAY_DIR / f"{stem}_{i}{suffix}"
+        i += 1
+    file_storage.save(str(dest))
+    try:
+        with PILImage.open(dest) as im:
+            w, h = im.size
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise ValueError("Uploaded file is not a readable image")
+    rel = str(dest.relative_to(BASE_DIR))
+    return {"src": rel, "url": f"/media/{rel}", "width": w, "height": h}
 
 
 def default_layout_for(w: int, h: int) -> dict:
@@ -152,6 +188,7 @@ def default_layout_for(w: int, h: int) -> dict:
             "rotation": 0,
         },
         "texts": texts,
+        "images": [],
     }
 
 
@@ -172,6 +209,8 @@ def load_starting_state(name: str) -> dict:
         from PIL import Image
         with Image.open(template_image_path(name)) as im:
             layout = default_layout_for(im.width, im.height)
+    if not isinstance(layout.get("images"), list):
+        layout["images"] = []
     if dummy is None:
         dummy = dict(DEFAULT_DUMMY)
     return layout, dummy
@@ -282,6 +321,23 @@ def api_save(name: str):
         "active_template_file": str(ACTIVE_TEMPLATE_FILE),
         "preview_url": f"/media/preview/{name}",
     })
+
+
+@app.route("/api/upload_overlay", methods=["POST"])
+def api_upload_overlay():
+    """Upload any image to use as an extra overlay (logo, signature, stamp).
+
+    Stores it under temp/overlays/ and returns {src, url, width, height}.
+    The canvas keeps `src` in layout.images so renders survive restarts."""
+    f = request.files.get("image") or request.files.get("overlay")
+    if not f or not getattr(f, "filename", ""):
+        return jsonify({"error": "No image file uploaded"}), 400
+    try:
+        return jsonify({"ok": True, **save_overlay_upload(f)})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Upload failed: {e}"}), 500
 
 
 @app.route("/media/<path:rel>")

@@ -178,6 +178,18 @@ select{
 .picker-msg{ margin-top:16px; font-size:13px; color:var(--accent); text-align:center; }
 .picker-msg.err{ color:var(--danger); }
 
+/* ---------------- extra images ---------------- */
+.images-list{ display:flex; flex-direction:column; gap:6px; max-height:180px; overflow-y:auto; }
+.img-row{
+  display:flex; align-items:center; gap:10px; padding:6px 8px;
+  border:1px solid var(--line); border-radius:8px; cursor:pointer;
+  background:rgba(255,255,255,.03);
+}
+.img-row:hover{ background:var(--panel-2); }
+.img-row.active{ border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+.img-row img{ width:40px; height:40px; object-fit:contain; border-radius:6px; background:#000; flex:0 0 auto; }
+.img-row .img-name{ flex:1; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
 /* ---------------- modal ---------------- */
 .modal{
   position:fixed; inset:0; background:rgba(6,7,10,.78); display:flex;

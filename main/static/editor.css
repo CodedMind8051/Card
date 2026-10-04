@@ -198,6 +198,32 @@ button{ font-family:inherit; }
 .reference.collapsed .reference-hint,
 .reference.collapsed #btn-recrop-2{ display:none; }
 
+/* ---------------- extra images strip ---------------- */
+.images-strip{
+  flex:0 0 auto; background:var(--panel); border-top:1px solid var(--line);
+  padding:0 16px 12px; max-height:22vh; overflow-y:auto;
+}
+.images-strip[hidden]{ display:none; }
+.images-head{
+  display:flex; align-items:center; gap:12px;
+  padding:10px 0 8px; position:sticky; top:0; background:var(--panel); z-index:2;
+}
+.images-hint{ font-size:11px; color:var(--text-dim); }
+.images-grid{ display:flex; gap:10px; flex-wrap:wrap; }
+.img-chip{
+  display:flex; align-items:center; gap:8px; padding:5px 8px 5px 5px;
+  border:1px solid var(--line); border-radius:8px; cursor:pointer;
+  background:rgba(255,255,255,.03); font-size:12px;
+}
+.img-chip:hover{ background:var(--panel-2); }
+.img-chip.active{ border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+.img-chip img{ width:38px; height:38px; object-fit:contain; border-radius:6px; background:#000; }
+.img-chip button{
+  border:1px solid transparent; background:none; color:var(--text-dim);
+  cursor:pointer; border-radius:6px; font-size:12px; padding:2px 6px;
+}
+.img-chip button:hover{ background:var(--danger); color:#fff; }
+
 /* ---------------- fields panel ---------------- */
 .fields-panel{
   flex:0 0 auto; background:var(--panel); border-top:1px solid var(--line);

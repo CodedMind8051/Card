@@ -64,6 +64,42 @@
     </main>
 
     <aside class="side">
+      <section class="panel" id="images-panel">
+        <div class="panel-head">Extra images</div>
+        <div class="panel-body">
+          <p class="hint">Stamp any image (logo, signature, seal) onto the card. Drag, resize &amp; rotate it on the canvas like any other field.</p>
+          <div class="images-list" id="images-list"></div>
+          <div class="row">
+            <button id="btn-add-image" class="btn small">+ Add image</button>
+            <input type="file" id="image-file" accept="image/*" hidden>
+          </div>
+          <div id="image-upload-msg" class="hint" hidden></div>
+        </div>
+      </section>
+
+      <section class="panel" id="image-edit-panel" hidden>
+        <div class="panel-head">Selected image</div>
+        <div class="panel-body">
+          <label class="field-key" id="image-label">—</label>
+          <div class="num-grid">
+            <label>X <input type="number" id="image-x"></label>
+            <label>Y <input type="number" id="image-y"></label>
+            <label>W <input type="number" id="image-w"></label>
+            <label>H <input type="number" id="image-h"></label>
+          </div>
+          <div class="num-grid">
+            <label>Rotate° <input type="number" id="image-rot" step="1"></label>
+            <label>Opacity <input type="number" id="image-opacity" min="0" max="1" step="0.05"></label>
+            <label>Radius <input type="number" id="image-radius" min="0" max="200"></label>
+          </div>
+          <div class="row">
+            <button id="btn-image-front" class="btn small" title="Bring to front">Front</button>
+            <button id="btn-image-back" class="btn small" title="Send to back">Back</button>
+            <button id="btn-image-remove" class="btn small danger">Remove</button>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" id="photo-panel" hidden>
         <div class="panel-head">Photo box</div>
         <div class="panel-body">
