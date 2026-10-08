@@ -1,0 +1,188 @@
+{
+  "name": "bSfG4",
+  "template_file": "templates/bSfG4_template.png",
+  "layout": {
+    "photo": {
+      "x": 1063,
+      "y": 254,
+      "width": 212,
+      "height": 505,
+      "corner_radius": 20,
+      "rotation": 0
+    },
+    "texts": {
+      "address": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "height": 40,
+        "min_font_size": 14,
+        "multiline": true,
+        "uppercase": false,
+        "width": 408,
+        "x": 1232,
+        "y": 446,
+        "anchor": "la"
+      },
+      "class": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "min_font_size": 14,
+        "multiline": false,
+        "uppercase": false,
+        "width": 408,
+        "x": 1576,
+        "y": 297,
+        "anchor": "la"
+      },
+      "dob": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "min_font_size": 14,
+        "multiline": false,
+        "uppercase": false,
+        "width": 408,
+        "x": 1354,
+        "y": 698,
+        "anchor": "la"
+      },
+      "father_name": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "min_font_size": 14,
+        "multiline": false,
+        "uppercase": false,
+        "width": 408,
+        "x": 2127,
+        "y": 607,
+        "anchor": "la"
+      },
+      "mobile_number": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "min_font_size": 14,
+        "multiline": false,
+        "uppercase": false,
+        "width": 408,
+        "x": 1661,
+        "y": 825,
+        "anchor": "la"
+      },
+      "mother_name": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "min_font_size": 14,
+        "multiline": false,
+        "uppercase": false,
+        "width": 993,
+        "x": 1693,
+        "y": 446,
+        "anchor": "la"
+      },
+      "roll_number": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "min_font_size": 14,
+        "multiline": false,
+        "uppercase": false,
+        "width": 408,
+        "x": 1489,
+        "y": 573,
+        "anchor": "la"
+      },
+      "school_name": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "min_font_size": 14,
+        "multiline": false,
+        "uppercase": false,
+        "width": 408,
+        "x": 2402,
+        "y": 363,
+        "anchor": "la"
+      },
+      "section": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "min_font_size": 14,
+        "multiline": false,
+        "prefix": "Sec- ",
+        "uppercase": false,
+        "width": 408,
+        "x": 1514,
+        "y": 900,
+        "anchor": "la"
+      },
+      "student_name": {
+        "align": "left",
+        "bold": true,
+        "color": "#D81616",
+        "font_size": 35,
+        "min_font_size": 14,
+        "multiline": false,
+        "uppercase": true,
+        "width": 408,
+        "x": 1770,
+        "y": 612,
+        "anchor": "la"
+      }
+    },
+    "images": [
+      {
+        "id": "img_muyc4sxk",
+        "label": "WhatsApp_Image_2026-10-07_at_22.04.04-removebg-preview",
+        "src": "temp/overlays/WhatsApp_Image_2026-10-07_at_22.04.04-removebg-preview.png",
+        "x": 28,
+        "y": 211,
+        "width": 167,
+        "height": 167,
+        "rotation": 0.0,
+        "opacity": 1.0,
+        "corner_radius": 0,
+        "enabled": true
+      },
+      {
+        "id": "img_muyc57ye",
+        "label": "Screenshot_From_2026-10-07_22-10-58-removebg-preview",
+        "src": "temp/overlays/Screenshot_From_2026-10-07_22-10-58-removebg-preview.png",
+        "x": 33,
+        "y": 1174,
+        "width": 237,
+        "height": 70,
+        "rotation": 0.0,
+        "opacity": 1.0,
+        "corner_radius": 0,
+        "enabled": true
+      }
+    ]
+  },
+  "dummy_data": {
+    "address": "ADDRESS",
+    "class": "CLASS",
+    "dob": "XX/XX/XXXX",
+    "father_name": "FATHER NAME",
+    "mobile_number": "+91XXXXXXXXXX",
+    "mother_name": "MOTHER NAME",
+    "roll_number": "ROLL",
+    "school_name": "SCHOOL NAME",
+    "section": "SEC",
+    "student_name": "STUDENT NAME"
+  }
+}

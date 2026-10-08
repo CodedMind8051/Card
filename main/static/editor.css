@@ -248,6 +248,12 @@ button{ font-family:inherit; }
 }
 .field textarea{ resize:vertical; min-height:44px; }
 .field input:focus, .field textarea:focus{ outline:none; border-color:var(--accent-2); box-shadow:0 0 0 3px rgba(124,134,255,.15); }
+.field-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.field-head label{ flex:1; }
+.lock-btn{ opacity:.55; }
+.lock-btn.active{ opacity:1; border-color:var(--accent); color:var(--accent); }
+.field input:disabled, .field textarea:disabled{ opacity:.55; cursor:not-allowed; }
+#btn-lock-photo.active, #btn-lock-text.active{ border-color:var(--accent); color:var(--accent); }
 
 /* ---------------- crop modal ---------------- */
 .modal{

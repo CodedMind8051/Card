@@ -26,7 +26,8 @@ from flask import Flask, jsonify, request, send_file, render_template, abort
 
 from card_render import (
     TEMPLATE_PATH, build_default_layout, merge_layout, render_card, hex_to_rgb,
-    load_active_template,
+    load_active_template, inject_missing_template_images,
+    enforce_locked_data_and_layout, restore_locked_pixels, is_photo_locked,
 )
 
 # cardfiller.py resolves its data directories (image/, output/, completed/,
@@ -61,6 +62,13 @@ def load_record(name: str) -> dict:
         abort(404, description=f"No record named '{name}'")
     record = json.loads(path.read_text(encoding="utf-8"))
     record["layout"] = merge_layout(build_default_layout(), record.get("layout"))
+    # Existing cards created before an overlay was added to the template
+    # keep images: [] — inherit any new template overlays (by id) so --edit
+    # shows the same extras as newly created cards.
+    try:
+        inject_missing_template_images(record["layout"])
+    except Exception:
+        pass
     return record
 
 
@@ -189,8 +197,25 @@ def api_save(name):
     record = load_record(name)
     payload = request.get_json(force=True)
 
-    record["data"] = payload.get("data", record["data"])
-    record["layout"] = merge_layout(record["layout"], payload.get("layout"))
+    import copy as _copy
+    old_data = _copy.deepcopy(record.get("data") or {})
+    old_layout = _copy.deepcopy(record.get("layout") or {})
+    old_output_rel = record.get("output_file", "")
+    old_source_file = record.get("source_file")
+
+    new_data = payload.get("data", record["data"])
+    if not isinstance(new_data, dict):
+        new_data = record["data"]
+    merged = merge_layout(record["layout"], payload.get("layout"))
+    # Locked fields/photo: keep original JSON values (ignore editor edits),
+    # persist locked flags (default off). Pixel-exact restore happens below.
+    new_data, merged, _photo_locked = enforce_locked_data_and_layout(
+        old_data, old_layout, dict(new_data), merged)
+    record["data"] = new_data
+    record["layout"] = merged
+    # A locked photo keeps its original source image (ignore newly uploaded one).
+    if _photo_locked and old_source_file:
+        record["source_file"] = old_source_file
     enhance_photo = bool(payload.get("enhance_photo", False))
 
     source = resolve_source_image(record)
@@ -200,6 +225,17 @@ def api_save(name):
         photo_source_path=str(source) if source else None,
         enhance_photo=enhance_photo,
     )
+    # Locked items: paste original pixels over the fresh render so they stay
+    # exactly as in the original card instead of re-rendering from the record.
+    try:
+        if old_output_rel:
+            old_path = (BASE_DIR / old_output_rel).resolve()
+            if old_path.exists():
+                from PIL import Image as _PILImage
+                with _PILImage.open(old_path) as _old:
+                    im = restore_locked_pixels(im, _old.convert("RGB"), old_layout)
+    except Exception:
+        pass
     CARD_DIR.mkdir(parents=True, exist_ok=True)
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
     output_path = CARD_DIR / f"{name}_filled.png"
@@ -216,6 +252,8 @@ def api_upload_photo(name):
     project's temp/uploads folder, records the new source path for re-rendering,
     and resets the crop so the user can re-crop the fresh image."""
     record = load_record(name)
+    if is_photo_locked(record.get("layout") or {}):
+        abort(400, description="Student photo is locked for this card — unlock it before replacing.")
     f = request.files.get("photo")
     if not f or not f.filename:
         abort(400, description="No photo file was uploaded")

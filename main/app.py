@@ -41,11 +41,18 @@ try:
     from card_render import (
         TEMPLATE_PATH, build_default_layout, merge_layout, render_card, hex_to_rgb,
         load_active_template, ACTIVE_TEMPLATE_FILE, TEMPLATES_DIR as CR_TEMPLATES_DIR,
-        list_designed_templates, save_active_template,
+        list_designed_templates, save_active_template, inject_missing_template_images,
+        enforce_locked_data_and_layout, restore_locked_pixels,
     )
 except Exception:
     TEMPLATE_PATH = "template.png"
     build_default_layout = merge_layout = render_card = hex_to_rgb = load_active_template = lambda *a, **k: None
+    def inject_missing_template_images(layout):
+        return layout
+    def enforce_locked_data_and_layout(o_data, o_layout, n_data, m_layout):
+        return n_data, m_layout, False
+    def restore_locked_pixels(new_im, old_im, old_layout):
+        return new_im
     ACTIVE_TEMPLATE_FILE = TEMPLATES_DIR / "active_template.json"
     list_designed_templates = lambda: []
     save_active_template = lambda *a, **k: None
@@ -357,6 +364,21 @@ def api_templates_activate():
     save_active_template(name, layout, dummy, template_file=str(template_path))
     return jsonify({"ok": True, "active": name})
 
+@app.route("/api/templates/sync", methods=["POST"])
+def api_templates_sync():
+    """Push new template overlays to all existing cards + re-render their PNGs."""
+    try:
+        import cardfiller
+    except ModuleNotFoundError:
+        from main import cardfiller
+    data = request.get_json(silent=True) or {}
+    rerender = not bool(data.get("no_rerender"))
+    try:
+        res = cardfiller.sync_existing_cards_with_template(rerender=rerender)
+        return jsonify({"ok": True, **res})
+    except Exception as e:
+        return jsonify({"error": str(e)[:500]}), 500
+
 @app.route("/api/history")
 def api_history():
     if not HISTORY_DIR.exists():
@@ -471,6 +493,12 @@ def _load_record(name: str) -> dict:
         rec["layout"] = merge_layout(build_default_layout(), rec.get("layout"))
     except Exception:
         pass
+    # Existing cards predate template overlays — inherit any new
+    # active-template images (by id) so the editor shows them like new cards.
+    try:
+        inject_missing_template_images(rec["layout"])
+    except Exception:
+        pass
     return rec
 
 def _record_template_path(record: dict) -> str:
@@ -555,11 +583,29 @@ def api_save(name):
         record = _load_record(name)
     except Exception as e:
         return jsonify({"error": str(e)[:300]}), 404
-    record["data"] = payload.get("data", record["data"])
+    import copy as _copy
+    old_data = _copy.deepcopy(record.get("data") or {})
+    old_layout = _copy.deepcopy(record.get("layout") or {})
+    old_output_rel = record.get("output_file", "")
+    old_source_file = record.get("source_file")
+    new_data = payload.get("data", record["data"])
+    if not isinstance(new_data, dict):
+        new_data = record["data"]
+    else:
+        new_data = dict(new_data)
     try:
-        record["layout"] = merge_layout(record["layout"], payload.get("layout"))
+        merged = merge_layout(record["layout"], payload.get("layout"))
     except Exception:
-        record["layout"] = payload.get("layout", record["layout"])
+        merged = payload.get("layout", record["layout"])
+    try:
+        new_data, merged, _photo_locked = enforce_locked_data_and_layout(
+            old_data, old_layout, new_data, merged)
+    except Exception:
+        _photo_locked = False
+    record["data"] = new_data
+    record["layout"] = merged
+    if _photo_locked and old_source_file:
+        record["source_file"] = old_source_file
     enhance_photo = bool(payload.get("enhance_photo", False))
     source = _resolve_source_image(record)
     try:
@@ -571,6 +617,15 @@ def api_save(name):
         )
     except Exception as e:
         return jsonify({"error": str(e)[:400]}), 500
+    try:
+        if old_output_rel:
+            old_path = (BASE_DIR / old_output_rel).resolve()
+            if old_path.exists():
+                from PIL import Image as _PILImage
+                with _PILImage.open(old_path) as _old:
+                    im = restore_locked_pixels(im, _old.convert("RGB"), old_layout)
+    except Exception:
+        pass
     CARD_DIR.mkdir(parents=True, exist_ok=True)
     RECORD_DIR.mkdir(parents=True, exist_ok=True)
     output_path = CARD_DIR / f"{name}_filled.png"
@@ -582,6 +637,14 @@ def api_save(name):
 @app.route("/api/upload_photo/<name>", methods=["POST"])
 def api_upload_photo(name):
     record = _load_record(name)
+    try:
+        if bool((record.get("layout") or {}).get("photo", {}).get("locked")):
+            abort(400, description="Student photo is locked for this card — unlock it before replacing.")
+    except Exception as _e:
+        # abort() raises HTTPException, not a real error — re-raise it
+        from werkzeug.exceptions import HTTPException as _HTTP
+        if isinstance(_e, _HTTP):
+            raise
     f = request.files.get("photo")
     if not f or not f.filename:
         abort(400, description="No photo file was uploaded")

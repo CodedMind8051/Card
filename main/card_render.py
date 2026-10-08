@@ -58,11 +58,11 @@ FIELD_POSITIONS = {
     "roll_number":   (440, 1083),
     "mobile_number": (440, 1140),
     "address":       (440, 1177),
-    # "blood_group":   (440, 1233),
-    # "id_code":       (440, 1289),
-    # "doj":           (440, 1345),
-    # "school_name":   (440, 1401),
-    # "designation":    (440, 1457),
+    "blood_group":   (440, 1233),
+    "id_code":       (440, 1289),
+    "doj":           (440, 1345),
+    "school_name":   (440, 1401),
+    "designation":    (440, 1457),
 }
 
 NAME_CENTER = (531, 784)      # fixedCard.py NAME_CENTER, drawn with anchor "mm"
@@ -229,6 +229,237 @@ def merge_layout(default, override):
             else:
                 result["texts"][key] = val
     return result
+
+
+def inject_missing_template_images(layout: dict) -> dict:
+    """Merge overlay images added to the template AFTER a card was created.
+
+    New cards snapshot `active_template.json` at fill time, but old sidecars
+    keep `images: []`. Without this, editing the template (e.g. adding a
+    logo/stamp overlay) only shows on new cards — old cards opened with
+    `--edit` never see it.
+
+    Union by `id`: every active-template image whose id is absent from the
+    record is appended (deep-copied). Per-card customisations (moved/resized
+    overlays, or ones the user deleted in the editor) are left untouched —
+    we never overwrite or re-add an id the card already has, and we never
+    delete card-specific images.
+    Returns the same dict (mutated) for convenience.
+    """
+    try:
+        active = load_active_template()
+    except Exception:
+        return layout
+    if not active:
+        return layout
+    try:
+        active_images = normalize_extra_images((active.get("layout") or {}).get("images"))
+    except Exception:
+        return layout
+    if not active_images:
+        return layout
+    if not isinstance(layout, dict):
+        return layout
+    record_images = layout.get("images")
+    if not isinstance(record_images, list):
+        record_images = []
+        layout["images"] = record_images
+    else:
+        # normalise in place so ids are comparable
+        try:
+            layout["images"] = normalize_extra_images(record_images)
+            record_images = layout["images"]
+        except Exception:
+            pass
+    existing_ids = {str(s.get("id")) for s in record_images if isinstance(s, dict)}
+    for spec in active_images:
+        if str(spec.get("id")) not in existing_ids:
+            record_images.append(copy.deepcopy(spec))
+            existing_ids.add(str(spec.get("id")))
+    return layout
+
+
+# ------------------------------------------------------- field/photo locks ---
+# Per-card locks: `layout["photo"]["locked"]` and `layout["texts"][key]["locked"]`
+# (bool, default False/off). When True, that item is preserved pixel-for-pixel
+# from the previously rendered output PNG on save, instead of re-rendering
+# from the JSON record. Stored per sidecar; never in the shared template.
+
+def is_photo_locked(layout: dict) -> bool:
+    try:
+        return bool((layout or {}).get("photo", {}).get("locked"))
+    except Exception:
+        return False
+
+
+def is_text_locked(layout: dict, key: str) -> bool:
+    try:
+        return bool((layout or {}).get("texts", {}).get(key, {}).get("locked"))
+    except Exception:
+        return False
+
+
+def locked_keys(layout: dict) -> dict:
+    """Return {"photo": bool, "texts": [keys]} for a layout (all default off)."""
+    texts = []
+    try:
+        for k, spec in ((layout or {}).get("texts") or {}).items():
+            if isinstance(spec, dict) and spec.get("locked"):
+                texts.append(k)
+    except Exception:
+        pass
+    return {"photo": is_photo_locked(layout), "texts": texts}
+
+
+def get_photo_box(spec: dict):
+    """Photo box as (left, top, right, bottom) ints in card pixel space."""
+    try:
+        x = int(spec.get("x", 0))
+        y = int(spec.get("y", 0))
+        w = int(spec.get("width", 0))
+        h = int(spec.get("height", 0))
+    except (TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return (x, y, x + w, y + h)
+
+
+def get_text_preserve_box(spec: dict):
+    """Text field preserve region as (left, top, right, bottom) ints.
+
+    Mirrors draw_text_box's anchor handling: "la" specs are top-left boxes,
+    while legacy "lm"/"mm" specs carry their position as a PIL anchor point.
+    Height defaults to font_size*1.4 when the spec has no explicit height.
+    """
+    try:
+        x = int(float(spec.get("x", 0)))
+        y = int(float(spec.get("y", 0)))
+        w = int(float(spec.get("width", 500) or 500))
+    except (TypeError, ValueError):
+        return None
+    if w <= 0:
+        return None
+    try:
+        h_spec = spec.get("height")
+        h = int(float(h_spec)) if h_spec is not None else None
+    except (TypeError, ValueError):
+        h = None
+    if not h or h <= 0:
+        try:
+            fs = int(float(spec.get("font_size", 44) or 44))
+        except (TypeError, ValueError):
+            fs = 44
+        h = int(fs * 1.4) + 4
+    anchor = str(spec.get("anchor", "la") or "la")
+    align = str(spec.get("align", "left") or "left")
+    # horizontal: "la" specs honour align within [x, x+w]; anchor-point specs
+    # already encode the offset in x.
+    if anchor == "la":
+        if align == "center":
+            # drawn centered in the box but glyphs only cover text width;
+            # preserve the whole box so the restore is exact.
+            l, t = x, y
+        elif align == "right":
+            l, t = x, y
+        else:
+            l, t = x, y
+    elif anchor == "mm":
+        l, t = x - w // 2, y - h // 2
+    else:  # "lm" and anything else: left edge at x, vertically centered at y
+        l, t = x, y - h // 2
+    return (l, t, l + w, t + h)
+
+
+def _clamp_box(box, img_w, img_h, pad=2):
+    if not box:
+        return None
+    l, t, r, b = box
+    l -= pad
+    t -= pad
+    r += pad
+    b += pad
+    l = max(0, l)
+    t = max(0, t)
+    r = min(img_w, r)
+    b = min(img_h, b)
+    if r <= l or b <= t:
+        return None
+    return (l, t, r, b)
+
+
+def enforce_locked_data_and_layout(old_data: dict, old_layout: dict,
+                                   new_data: dict, merged_layout: dict):
+    """Restore locked items' data+layout from the stored record.
+
+    `merged_layout` is already merge_layout(old_layout, payload_layout), so a
+    payload-provided `locked` flag has overwritten the old one, while a missing
+    flag inherits the old value (backwards compatible with old clients).
+    For every locked photo/text: copy the old spec back (keeping locked=True)
+    and revert the data value. Returns (new_data, merged_layout, photo_locked).
+    """
+    old_data = old_data or {}
+    old_layout = old_layout or {}
+    new_data = new_data if isinstance(new_data, dict) else {}
+    if not isinstance(merged_layout, dict):
+        return new_data, merged_layout, False
+    merged_layout.setdefault("photo", {})
+    merged_layout.setdefault("texts", {})
+    # photo
+    photo_locked = bool(merged_layout.get("photo", {}).get("locked"))
+    if photo_locked:
+        old_photo = (old_layout.get("photo") or {}) if isinstance(old_layout, dict) else {}
+        kept = copy.deepcopy(old_photo) if isinstance(old_photo, dict) else {}
+        kept["locked"] = True
+        merged_layout["photo"] = kept
+    # texts
+    old_texts = (old_layout.get("texts") or {}) if isinstance(old_layout, dict) else {}
+    for key, spec in list((merged_layout.get("texts") or {}).items()):
+        if isinstance(spec, dict) and spec.get("locked"):
+            if key in old_texts and isinstance(old_texts[key], dict):
+                kept = copy.deepcopy(old_texts[key])
+                kept["locked"] = True
+                merged_layout["texts"][key] = kept
+            else:
+                merged_layout["texts"][key]["locked"] = True
+            if key in old_data:
+                new_data[key] = old_data[key]
+    return new_data, merged_layout, photo_locked
+
+
+def restore_locked_pixels(new_im: Image.Image, old_im: Image.Image,
+                          old_layout: dict) -> Image.Image:
+    """Paste locked photo/text regions from the previous output onto the fresh
+    render, so locked items stay pixel-identical to the original card.
+
+    Uses the OLD layout boxes for both src and dst (locked items cannot move,
+    enforced above). No-op when sizes differ or no locks. Returns new_im.
+    """
+    try:
+        if new_im is None or old_im is None:
+            return new_im
+        if new_im.size != old_im.size:
+            return new_im
+        if new_im.mode != "RGB":
+            new_im = new_im.convert("RGB")
+        if old_im.mode != "RGB":
+            old_im = old_im.convert("RGB")
+        W, H = new_im.size
+        boxes = []
+        if is_photo_locked(old_layout):
+            boxes.append(_clamp_box(get_photo_box((old_layout or {}).get("photo") or {}), W, H))
+        for key in locked_keys(old_layout).get("texts", []):
+            spec = ((old_layout or {}).get("texts") or {}).get(key) or {}
+            boxes.append(_clamp_box(get_text_preserve_box(spec), W, H))
+        for box in boxes:
+            if not box:
+                continue
+            l, t, r, b = box
+            patch = old_im.crop((l, t, r, b))
+            new_im.paste(patch, (l, t))
+        return new_im
+    except Exception:
+        return new_im
 
 
 # ------------------------------------------------------------ photo utils ---

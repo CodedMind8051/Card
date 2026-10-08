@@ -16,6 +16,7 @@ from collections import deque
 from card_render import (
     TEMPLATE_PATH, PHOTO_BOX, TEMPLATES_DIR,
     build_default_layout, detect_face_crop_rect, render_card, load_active_template,
+    merge_layout, inject_missing_template_images, normalize_extra_images,
 )
 
 IMAGE_DIR = Path("image")
@@ -500,7 +501,8 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
 
     active = load_active_template()
     if active:
-        layout = dict(active["layout"])
+        import copy as _copy
+        layout = _copy.deepcopy(active["layout"])
         template_path = str(Path(active["template_file"]))
     else:
         layout = build_default_layout()
@@ -532,6 +534,104 @@ def fill_template(data: dict, image_name: str, source_image_path: Path, ai_ratio
         source_rel = str(Path("completed") / image_name)
     save_sidecar(image_name, data, layout, source_rel, str(output_path), template_file=template_path)
     return output_path
+
+
+def _resolve_card_source_image(record: dict) -> Path | None:
+    """Find the original photo for an existing card (same search as editor)."""
+    candidates = []
+    src = record.get("source_file")
+    if src:
+        candidates.append(Path(src))
+    name = record.get("image_name", "")
+    if name:
+        candidates.extend([
+            COMPLETED_DIR / name,
+            COMPLETED_FORM_DIR / name,
+            COMPLETED_STUDENT_DIR / name,
+            IMAGE_DIR / name,
+        ])
+    for c in candidates:
+        try:
+            if c.exists() and c.is_file():
+                return c
+        except OSError:
+            continue
+    return None
+
+
+def sync_existing_cards_with_template(rerender: bool = True) -> dict:
+    """Propagate new template overlays to all existing cards.
+
+    For every sidecar in output/records: merge its layout onto defaults,
+    inject any active-template overlay images missing by id, save the sidecar,
+    and (if rerender) re-render output/cards/<stem>_filled.png with the exact
+    same render_card path new cards use.
+
+    Returns {"updated": n, "rerendered": m, "errors": [...]}.
+    """
+    active = load_active_template()
+    if not active:
+        return {"updated": 0, "rerendered": 0, "errors": ["No active template found"]}
+    try:
+        active_images = normalize_extra_images((active.get("layout") or {}).get("images"))
+    except Exception:
+        active_images = []
+    if not active_images:
+        return {"updated": 0, "rerendered": 0, "errors": ["Active template has no overlay images"]}
+    active_ids = {str(s.get("id")) for s in active_images}
+
+    RECORD_DIR.mkdir(parents=True, exist_ok=True)
+    CARD_DIR.mkdir(parents=True, exist_ok=True)
+    updated = 0
+    rerendered = 0
+    errors = []
+    for sidecar in sorted(RECORD_DIR.glob("*_data.json")):
+        try:
+            record = json.loads(sidecar.read_text(encoding="utf-8"))
+        except Exception as e:
+            errors.append(f"{sidecar.name}: unreadable ({e})")
+            continue
+        layout = merge_layout(build_default_layout(), record.get("layout"))
+        before_ids = {str(s.get("id")) for s in (layout.get("images") or []) if isinstance(s, dict)}
+        inject_missing_template_images(layout)
+        after_ids = {str(s.get("id")) for s in (layout.get("images") or []) if isinstance(s, dict)}
+        added = after_ids - before_ids
+        # keep the card pointing at its own template file if it still exists,
+        # else fall back to the active template image
+        tpl = record.get("template_file") or active.get("template_file") or TEMPLATE_PATH
+        if not Path(str(tpl)).exists():
+            tpl = str(active.get("template_file"))
+            record["template_file"] = tpl
+        record["layout"] = layout
+        if added:
+            updated += 1
+        # re-render so output PNGs actually show the overlay (even when the
+        # sidecar already had the id, the file on disk may be stale)
+        if rerender:
+            try:
+                source = _resolve_card_source_image(record)
+                im = render_card(
+                    record.get("data", {}), layout,
+                    template_path=str(tpl),
+                    photo_source_path=str(source) if source else None,
+                )
+                stem = sidecar.stem[:-5]  # strip _data
+                out = CARD_DIR / f"{stem}_filled.png"
+                im.save(out)
+                try:
+                    record["output_file"] = str(out.relative_to(Path.cwd()))
+                except ValueError:
+                    record["output_file"] = str(out)
+                rerendered += 1
+            except Exception as e:
+                errors.append(f"{sidecar.name}: render failed ({e})")
+                # still save the layout change
+        try:
+            sidecar.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            errors.append(f"{sidecar.name}: save failed ({e})")
+    return {"updated": updated, "rerendered": rerendered, "errors": errors,
+            "overlay_ids": sorted(active_ids)}
 
 
 def process_single_image(image_path: Path, enhance_photo=False, student_photo_path: Path = None):
@@ -963,6 +1063,13 @@ def main():
                         help="Restore the archived batch NAME from history/ back into the project so you can continue it.")
     parser.add_argument("--current", action="store_true", default=False,
                         help="Explicitly keep using the current working state (default behaviour; cancels --given-name).")
+    parser.add_argument("--sync-template", action="store_true", default=False,
+                        help="Propagate new template overlay images to all existing cards "
+                             "(output/records/*_data.json) and re-render their PNGs, then stop. "
+                             "Use after adding a logo/stamp overlay in the designer so old cards "
+                             "show it like new cards do.")
+    parser.add_argument("--no-rerender", action="store_true", default=False,
+                        help="With --sync-template, only update the sidecar layouts without re-rendering PNGs.")
     args = parser.parse_args()
 
     if args.mark_old and args.given_name:
@@ -982,6 +1089,13 @@ def main():
 
     if args.edit and args.new:
         print("Choose one of --edit or --new, not both.")
+        return
+    if args.sync_template:
+        res = sync_existing_cards_with_template(rerender=not args.no_rerender)
+        print(f"  Synced template overlays -> {res['rerendered']} re-rendered, "
+              f"{res['updated']} sidecar(s) gained new overlay(s) {res.get('overlay_ids')}")
+        for e in res.get("errors", []):
+            print(f"    ! {e}")
         return
     if args.edit:
         from editor_app import run_editor

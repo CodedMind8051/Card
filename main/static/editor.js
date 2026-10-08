@@ -467,6 +467,7 @@ async function buildCanvas(record) {
   // ---- text fields ----
   for (const [key, spec] of Object.entries(currentLayout.texts)) {
     const displayText = displayValueFor(key, spec);
+    const locked = !!spec.locked;
     const tb = new fabric.Textbox(displayText || "", {
       left: spec.x, top: spec.y, width: spec.width || 400,
       fontSize: spec.font_size, fill: spec.color,
@@ -475,6 +476,10 @@ async function buildCanvas(record) {
       textAlign: spec.align || "left",
       hasRotatingPoint: false,
       lockRotation: true,
+      lockMovementX: locked, lockMovementY: locked,
+      lockScalingX: locked, lockScalingY: locked,
+      editable: !locked, selectable: !locked,
+      opacity: locked ? 0.75 : 1,
     });
     tb.setControlsVisibility({ mtr: false });
     tb.fieldKey = key;
@@ -690,10 +695,15 @@ function renderPhotoObject() {
   }
 
   const img = new fabric.Image(boxed);
+  const photoLocked = isPhotoLocked();
   img.set({
     left: spec.x, top: spec.y,
     hasRotatingPoint: false,
     lockRotation: true,
+    lockMovementX: photoLocked, lockMovementY: photoLocked,
+    lockScalingX: photoLocked, lockScalingY: photoLocked,
+    selectable: !photoLocked,
+    opacity: photoLocked ? 0.85 : 1,
     cornerColor: "#f0b455", cornerSize: 12, transparentCorners: false,
     borderColor: "#f0b455", borderScaleFactor: 2,
   });
@@ -849,28 +859,113 @@ function bakeScale(key, obj) {
 
 /* -------------------------------------------------------- fields form -- */
 
+function isTextLocked(key) {
+  try { return !!((currentLayout && currentLayout.texts && currentLayout.texts[key] || {}).locked); }
+  catch (e) { return false; }
+}
+
+function isPhotoLocked() {
+  try { return !!((currentLayout && currentLayout.photo || {}).locked); }
+  catch (e) { return false; }
+}
+
+function setTextLocked(key, locked) {
+  if (!currentLayout || !currentLayout.texts || !currentLayout.texts[key]) return;
+  currentLayout.texts[key].locked = !!locked;
+  const obj = textObjs[key];
+  if (obj) applyTextLockVisual(key, obj);
+  const input = document.querySelector(`[data-field="${key}"]`);
+  if (input) input.disabled = !!locked;
+  const btn = document.querySelector(`[data-lock-field="${key}"]`);
+  if (btn) { btn.textContent = locked ? "🔒" : "🔓"; btn.classList.toggle("active", !!locked); btn.title = locked ? "Unlock field (allow editing)" : "Lock field (keep original pixels on save)"; }
+  syncTextLockButton();
+}
+
+function applyTextLockVisual(key, obj) {
+  const locked = isTextLocked(key);
+  obj.lockMovementX = locked;
+  obj.lockMovementY = locked;
+  obj.lockScalingX = locked;
+  obj.lockScalingY = locked;
+  obj.lockRotation = true;
+  obj.editable = !locked;
+  obj.selectable = !locked;
+  obj.opacity = locked ? 0.75 : 1;
+}
+
+function updatePhotoLockUI() {
+  const locked = isPhotoLocked();
+  const btn = $("#btn-lock-photo");
+  if (btn) { btn.textContent = locked ? "🔒 Photo" : "🔓 Photo"; btn.classList.toggle("active", locked); }
+  for (const id of ["#btn-recrop", "#btn-recrop-2", "#btn-rotate-l", "#btn-rotate-r"]) {
+    const el = $(id);
+    if (el) el.disabled = locked;
+  }
+  if (photoObj) {
+    photoObj.lockMovementX = locked;
+    photoObj.lockMovementY = locked;
+    photoObj.lockScalingX = locked;
+    photoObj.lockScalingY = locked;
+    photoObj.lockRotation = true;
+    photoObj.selectable = !locked;
+    photoObj.opacity = locked ? 0.85 : 1;
+    if (canvas) canvas.requestRenderAll();
+  }
+}
+
+function syncTextLockButton() {
+  const btn = $("#btn-lock-text");
+  if (!btn || !canvas) return;
+  const obj = canvas.getActiveObject();
+  if (obj && obj.fieldKey) {
+    btn.disabled = false;
+    const locked = isTextLocked(obj.fieldKey);
+    btn.textContent = locked ? "🔒 Locked" : "🔓 Lock";
+    btn.classList.toggle("active", locked);
+  } else {
+    btn.textContent = "🔓 Lock";
+    btn.classList.remove("active");
+  }
+}
+
 function buildFieldsPanel() {
   const grid = $("#fields-grid");
   grid.innerHTML = "";
   for (const key of Object.keys(currentLayout.texts)) {
     const wrap = document.createElement("div");
     wrap.className = "field";
+    const head = document.createElement("div");
+    head.className = "field-head";
     const label = document.createElement("label");
     label.textContent = FIELD_LABELS[key] || key;
-    wrap.appendChild(label);
+    const lockBtn = document.createElement("button");
+    lockBtn.className = "btn small lock-btn";
+    lockBtn.dataset.lockField = key;
+    const locked = !!((currentLayout.texts[key] || {}).locked);
+    lockBtn.textContent = locked ? "🔒" : "🔓";
+    lockBtn.classList.toggle("active", locked);
+    lockBtn.title = locked ? "Unlock field (allow editing)" : "Lock field (keep original pixels on save)";
+    lockBtn.addEventListener("click", () => setTextLocked(key, !isTextLocked(key)));
+    head.appendChild(label);
+    head.appendChild(lockBtn);
+    wrap.appendChild(head);
 
     const isLong = key === "address";
     const input = document.createElement(isLong ? "textarea" : "input");
     if (!isLong) input.type = "text";
     input.value = currentData[key] || "";
     input.dataset.field = key;
+    input.disabled = locked;
+    input.title = locked ? "Locked — unlock to edit" : "";
     input.addEventListener("input", () => onFieldInput(key, input.value));
     wrap.appendChild(input);
     grid.appendChild(wrap);
   }
+  updatePhotoLockUI();
 }
 
 function onFieldInput(key, value) {
+  if (isTextLocked(key)) return;
   currentData[key] = value;
   const spec = currentLayout.texts[key];
   const obj = textObjs[key];
@@ -882,6 +977,7 @@ function onFieldInput(key, value) {
 }
 
 function syncFieldInputFromCanvas(key) {
+  if (isTextLocked(key)) return;
   const spec = currentLayout.texts[key];
   let val = textObjs[key].text || "";
   if (key === "section" && spec.prefix && val.startsWith(spec.prefix)) val = val.slice(spec.prefix.length);
@@ -905,13 +1001,29 @@ function onSelectionChanged(e) {
   }
   selectedImageId = null;
   if (ic) ic.hidden = true;
-  if (!obj || !obj.fieldKey) { $("#text-controls").hidden = true; renderImagesStrip(); return; }
+  if (!obj || !obj.fieldKey) { $("#text-controls").hidden = true; renderImagesStrip(); syncTextLockButton(); return; }
   $("#text-controls").hidden = false;
   $("#ctl-font-size").value = Math.round(fontBase[obj.fieldKey] != null ? fontBase[obj.fieldKey] : obj.fontSize);
   $("#ctl-color").value = rgbToHex(obj.fill);
   $("#ctl-bold").checked = obj.fontWeight === "bold";
   renderImagesStrip();
+  syncTextLockButton();
 }
+
+// ---- field/photo lock toolbar buttons ----
+$("#btn-lock-photo").addEventListener("click", () => {
+  if (!currentLayout) return;
+  currentLayout.photo.locked = !isPhotoLocked();
+  updatePhotoLockUI();
+  const s = $("#save-status");
+  if (s) { s.textContent = currentLayout.photo.locked ? "Photo locked — will keep original pixels on save." : "Photo unlocked."; s.classList.remove("ok"); }
+});
+$("#btn-lock-text").addEventListener("click", () => {
+  if (!canvas) return;
+  const obj = canvas.getActiveObject();
+  if (!obj || !obj.fieldKey) { alert("Select a text field on the canvas first, or use the 🔓 button next to a field below."); return; }
+  setTextLocked(obj.fieldKey, !isTextLocked(obj.fieldKey));
+});
 
 // ---- extra-image toolbar controls + upload ----
 $("#btn-add-image").addEventListener("click", () => $("#image-file").click());
@@ -993,6 +1105,7 @@ $("#btn-img-delete").addEventListener("click", () => {
 $("#ctl-font-size").addEventListener("input", (e) => {
   const obj = canvas.getActiveObject();
   if (!obj || !obj.fieldKey) return;
+  if (isTextLocked(obj.fieldKey)) return;
   fontBase[obj.fieldKey] = parseInt(e.target.value || "10", 10);
   fitTextDisplay(obj.fieldKey, obj);
   canvas.requestRenderAll();
@@ -1000,12 +1113,14 @@ $("#ctl-font-size").addEventListener("input", (e) => {
 $("#ctl-color").addEventListener("input", (e) => {
   const obj = canvas.getActiveObject();
   if (!obj) return;
+  if (obj.fieldKey && isTextLocked(obj.fieldKey)) return;
   obj.set("fill", e.target.value);
   canvas.requestRenderAll();
 });
 $("#ctl-bold").addEventListener("change", (e) => {
   const obj = canvas.getActiveObject();
   if (!obj) return;
+  if (obj.fieldKey && isTextLocked(obj.fieldKey)) return;
   obj.set("fontWeight", e.target.checked ? "bold" : "normal");
   if (obj.fieldKey) fitTextDisplay(obj.fieldKey, obj);
   canvas.requestRenderAll();
@@ -1040,6 +1155,7 @@ $("#btn-rotate-r").addEventListener("click", () => quickRotate(90));
 
 function quickRotate(delta) {
   if (!currentLayout.photo.crop) return;
+  if (isPhotoLocked()) { alert("Student photo is locked — unlock it to rotate."); return; }
   currentLayout.photo.rotation = ((currentLayout.photo.rotation || 0) + delta + 360) % 360;
   renderPhotoObject();
 }
@@ -1090,6 +1206,7 @@ function mapCropToSourceRect(rect, crop, rotation) {
 }
 
 async function openCropModal() {
+  if (isPhotoLocked()) { alert("Student photo is locked — unlock it to recrop."); return; }
   const spec = currentLayout.photo;
   const crop = spec.crop;
 
@@ -1138,6 +1255,7 @@ function showCropPreview() {
 }
 
 async function uploadNewPhoto(file) {
+  if (isPhotoLocked()) { alert("Student photo is locked — unlock it to replace."); return; }
   const fd = new FormData();
   fd.append("photo", file);
 
@@ -1191,6 +1309,7 @@ function closeCropModal() {
 
 function applyCrop() {
   if (!cropper) return;
+  if (isPhotoLocked()) { closeCropModal(); return; }
   const d = cropper.getData(true);
   const spec = currentLayout.photo;
   currentLayout.photo.crop = mapCropToSourceRect(d, spec.crop, spec.rotation || 0);
@@ -1216,6 +1335,8 @@ document.addEventListener("keydown", (e) => {
   const obj = canvas.getActiveObject();
   if (!obj) return;
   if (obj.isEditing) return;
+  if (obj.fieldKey && isTextLocked(obj.fieldKey)) return;
+  if (obj === photoObj && isPhotoLocked()) return;
   const t = document.activeElement;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
   e.preventDefault();
@@ -1231,9 +1352,9 @@ function collectLayoutFromCanvas() {
   for (const [id, o] of Object.entries(imageObjs)) {
     bakeImageObj(id, o);
   }
-  const layout = { photo: { ...currentLayout.photo }, texts: {}, images: (currentLayout.images || []).map((s) => ({ ...s })) };
+  const layout = { photo: { ...currentLayout.photo, locked: !!currentLayout.photo.locked }, texts: {}, images: (currentLayout.images || []).map((s) => ({ ...s })) };
 
-  if (photoObj) {
+  if (photoObj && !isPhotoLocked()) {
     layout.photo.x = Math.round(photoObj.left);
     layout.photo.y = Math.round(photoObj.top);
     layout.photo.width = Math.round(photoObj.width * photoObj.scaleX);
@@ -1242,6 +1363,10 @@ function collectLayoutFromCanvas() {
 
   for (const [key, obj] of Object.entries(textObjs)) {
     const spec = currentLayout.texts[key];
+    if (isTextLocked(key)) {
+      layout.texts[key] = { ...spec, locked: true };
+      continue;
+    }
     let x = spec.x, y = spec.y;
     if (movedKeys.has(key)) {
       const pt = anchorPointFromObject(key, obj);
@@ -1250,6 +1375,7 @@ function collectLayoutFromCanvas() {
     }
     layout.texts[key] = {
       ...spec,
+      locked: false,
       x: Math.round(x),
       y: Math.round(y),
       width: Math.round(obj.width * (obj.scaleX || 1)),
